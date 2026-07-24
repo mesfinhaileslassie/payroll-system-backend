@@ -7,36 +7,47 @@ public class User
 {
     [Key]
     public int Id { get; set; }
-    
+
     [Required]
     [MaxLength(50)]
     public string Username { get; set; } = string.Empty;
-    
+
     [Required]
     [MaxLength(100)]
     public string Email { get; set; } = string.Empty;
-    
+
     [Required]
     public string PasswordHash { get; set; } = string.Empty;
-    
+
     [MaxLength(50)]
     public string? FirstName { get; set; }
-    
+
     [MaxLength(50)]
     public string? LastName { get; set; }
-    
+
     [MaxLength(20)]
     public string? Phone { get; set; }
-    
+
     [MaxLength(10)]
     public string? Gender { get; set; }
-    
+
+    [MaxLength(50)]
+    public string? Department { get; set; }          // NEW
+
+    [MaxLength(50)]
+    public string? Position { get; set; }            // NEW
+
+    [MaxLength(20)]
+    public string? EmployeeId { get; set; }          // NEW
+
     public bool IsActive { get; set; } = true;
+
+    public string Role { get; set; } = "Employee";   // NEW: "Admin" or "Employee"
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
-    
-    // Navigation properties
+
     public ICollection<Device> Devices { get; set; } = new List<Device>();
     public ICollection<BudgetApproval> BudgetApprovals { get; set; } = new List<BudgetApproval>();
 }

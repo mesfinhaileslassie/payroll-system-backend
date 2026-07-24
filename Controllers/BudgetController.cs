@@ -33,15 +33,11 @@ public class BudgetController : ControllerBase
         try
         {
             if (request.Amount <= 0 || string.IsNullOrEmpty(request.Department))
-            {
                 return BadRequest(new { success = false, message = "Valid amount and department are required" });
-            }
 
             var user = await _context.Users.FindAsync(request.UserId);
             if (user == null)
-            {
                 return BadRequest(new { success = false, message = "User not found" });
-            }
 
             var budgetApproval = new BudgetApproval
             {
@@ -71,16 +67,16 @@ public class BudgetController : ControllerBase
         }
     }
 
-    // ==================== APPROVE WITH OTP (with detailed logging) ====================
+    // ==================== APPROVE WITH OTP (Simplified – only username + OTP) ====================
 
     [HttpPost("{id}/approve-with-otp")]
     public async Task<IActionResult> ApproveBudgetWithOtp(int id, [FromBody] ApproveWithOtpRequest request)
     {
         try
         {
-            // 1. Find employee
+            // 1. Find employee by username only
             var employee = await _context.Users
-                .FirstOrDefaultAsync(u => u.Id == request.EmployeeId && u.Username == request.Username);
+                .FirstOrDefaultAsync(u => u.Username == request.Username);
             if (employee == null)
                 return BadRequest(new { success = false, message = "Employee not found" });
 
@@ -112,14 +108,11 @@ public class BudgetController : ControllerBase
                 _logger.LogInformation($"🔍 Checking device {device.Id}, SecretKey: {device.SecretKey}");
                 _logger.LogInformation($"📥 Client OTP: {request.Otp}");
 
-                // Generate OTPs with full details
                 var (serverOtp, counter, hash) = GenerateTOTPWithLog(device.SecretKey, 0);
-                var (prevOtp, prevCounter, prevHash) = GenerateTOTPWithLog(device.SecretKey, -1);
-                var (nextOtp, nextCounter, nextHash) = GenerateTOTPWithLog(device.SecretKey, 1);
+                var (prevOtp, _, _) = GenerateTOTPWithLog(device.SecretKey, -1);
+                var (nextOtp, _, _) = GenerateTOTPWithLog(device.SecretKey, 1);
 
                 _logger.LogInformation($"🔑 Device {device.Id}: Current counter={counter}, hash={hash}, OTP={serverOtp}");
-                _logger.LogInformation($"🔑 Device {device.Id}: Prev counter={prevCounter}, hash={prevHash}, OTP={prevOtp}");
-                _logger.LogInformation($"🔑 Device {device.Id}: Next counter={nextCounter}, hash={nextHash}, OTP={nextOtp}");
 
                 if (serverOtp == request.Otp || prevOtp == request.Otp || nextOtp == request.Otp)
                 {
@@ -215,11 +208,7 @@ public class BudgetController : ControllerBase
                 })
                 .ToListAsync();
 
-            return Ok(new
-            {
-                success = true,
-                data = budgets
-            });
+            return Ok(new { success = true, data = budgets });
         }
         catch (Exception ex)
         {
@@ -249,11 +238,7 @@ public class BudgetController : ControllerBase
                 })
                 .ToListAsync();
 
-            return Ok(new
-            {
-                success = true,
-                data = budgets
-            });
+            return Ok(new { success = true, data = budgets });
         }
         catch (Exception ex)
         {
@@ -274,7 +259,6 @@ public class BudgetController : ControllerBase
         var hashBytes = sha.ComputeHash(combinedBytes);
         var hashString = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
 
-        // Extract first 6 digits from hash
         var tokenValue = "";
         foreach (char c in hashString)
         {
