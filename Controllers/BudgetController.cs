@@ -5,6 +5,7 @@ using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
 using PayrollSystem.API.Models;
 using PayrollSystem.API.Services;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace PayrollSystem.API.Controllers;
@@ -70,92 +71,96 @@ public class BudgetController : ControllerBase
         }
     }
 
-    // ==================== APPROVE WITH OTP ====================
+    // ==================== APPROVE WITH OTP (with detailed logging) ====================
 
-   [HttpPost("{id}/approve-with-otp")]
-public async Task<IActionResult> ApproveBudgetWithOtp(int id, [FromBody] ApproveWithOtpRequest request)
-{
-    try
+    [HttpPost("{id}/approve-with-otp")]
+    public async Task<IActionResult> ApproveBudgetWithOtp(int id, [FromBody] ApproveWithOtpRequest request)
     {
-        // 1. Find employee
-        var employee = await _context.Users
-            .FirstOrDefaultAsync(u => u.Id == request.EmployeeId && u.Username == request.Username);
-        if (employee == null)
-            return BadRequest(new { success = false, message = "Employee not found" });
-
-        // 2. Find active devices for this employee
-        var devices = await _context.Devices
-            .Where(d => d.UserId == employee.Id && d.Status == "ACTIVE")
-            .ToListAsync();
-
-        if (devices.Count == 0)
-            return BadRequest(new { success = false, message = "No active device found for this employee" });
-
-        // 3. Find the budget
-        var budget = await _context.BudgetApprovals.FindAsync(id);
-        if (budget == null)
-            return NotFound(new { success = false, message = "Budget not found" });
-
-        if (budget.Status != "PENDING")
-            return BadRequest(new { success = false, message = $"Budget is already {budget.Status}" });
-
-        // 4. Validate OTP against all devices
-        bool otpValid = false;
-        Device? matchingDevice = null;
-        foreach (var device in devices)
+        try
         {
-            if (string.IsNullOrEmpty(device.SecretKey))
-                continue;
+            // 1. Find employee
+            var employee = await _context.Users
+                .FirstOrDefaultAsync(u => u.Id == request.EmployeeId && u.Username == request.Username);
+            if (employee == null)
+                return BadRequest(new { success = false, message = "Employee not found" });
 
-            var serverOtp = GenerateTOTP(device.SecretKey);
-            var prevOtp = GenerateTOTP(device.SecretKey, -1);
-            var nextOtp = GenerateTOTP(device.SecretKey, 1);
+            // 2. Find active devices for this employee
+            var devices = await _context.Devices
+                .Where(d => d.UserId == employee.Id && d.Status == "ACTIVE")
+                .ToListAsync();
 
-            // Log the generated OTPs for debugging
-            _logger.LogInformation($"Device ID: {device.Id}, SecretKey: {device.SecretKey}");
-            _logger.LogInformation($"Server OTP (current): {serverOtp}, (prev): {prevOtp}, (next): {nextOtp}");
-            _logger.LogInformation($"Client OTP: {request.Otp}");
+            if (devices.Count == 0)
+                return BadRequest(new { success = false, message = "No active device found for this employee" });
 
-            if (serverOtp == request.Otp || prevOtp == request.Otp || nextOtp == request.Otp)
+            // 3. Find the budget
+            var budget = await _context.BudgetApprovals.FindAsync(id);
+            if (budget == null)
+                return NotFound(new { success = false, message = "Budget not found" });
+
+            if (budget.Status != "PENDING")
+                return BadRequest(new { success = false, message = $"Budget is already {budget.Status}" });
+
+            // 4. Validate OTP against all devices
+            bool otpValid = false;
+            Device? matchingDevice = null;
+
+            foreach (var device in devices)
             {
-                otpValid = true;
-                matchingDevice = device;
-                break;
+                if (string.IsNullOrEmpty(device.SecretKey))
+                    continue;
+
+                _logger.LogInformation($"🔍 Checking device {device.Id}, SecretKey: {device.SecretKey}");
+                _logger.LogInformation($"📥 Client OTP: {request.Otp}");
+
+                // Generate OTPs with full details
+                var (serverOtp, counter, hash) = GenerateTOTPWithLog(device.SecretKey, 0);
+                var (prevOtp, prevCounter, prevHash) = GenerateTOTPWithLog(device.SecretKey, -1);
+                var (nextOtp, nextCounter, nextHash) = GenerateTOTPWithLog(device.SecretKey, 1);
+
+                _logger.LogInformation($"🔑 Device {device.Id}: Current counter={counter}, hash={hash}, OTP={serverOtp}");
+                _logger.LogInformation($"🔑 Device {device.Id}: Prev counter={prevCounter}, hash={prevHash}, OTP={prevOtp}");
+                _logger.LogInformation($"🔑 Device {device.Id}: Next counter={nextCounter}, hash={nextHash}, OTP={nextOtp}");
+
+                if (serverOtp == request.Otp || prevOtp == request.Otp || nextOtp == request.Otp)
+                {
+                    otpValid = true;
+                    matchingDevice = device;
+                    break;
+                }
             }
-        }
 
-        if (!otpValid)
-        {
-            _logger.LogWarning($"OTP validation failed for employee {employee.Id} ({employee.Username})");
-            return BadRequest(new { success = false, message = "Invalid OTP" });
-        }
+            if (!otpValid)
+            {
+                _logger.LogWarning($"OTP validation failed for employee {employee.Id} ({employee.Username})");
+                return BadRequest(new { success = false, message = "Invalid OTP" });
+            }
 
-        // 5. Approve the budget
-        budget.Status = "APPROVED";
-        budget.ApprovedAt = DateTime.UtcNow;
-        budget.UpdatedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
-
-        // 6. Update device last used
-        if (matchingDevice != null)
-        {
-            matchingDevice.LastUsedAt = DateTime.UtcNow;
+            // 5. Approve the budget
+            budget.Status = "APPROVED";
+            budget.ApprovedAt = DateTime.UtcNow;
+            budget.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
-        }
 
-        return Ok(new
+            // 6. Update device last used
+            if (matchingDevice != null)
+            {
+                matchingDevice.LastUsedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+            }
+
+            return Ok(new
+            {
+                success = true,
+                message = "Budget approved successfully",
+                status = budget.Status
+            });
+        }
+        catch (Exception ex)
         {
-            success = true,
-            message = "Budget approved successfully",
-            status = budget.Status
-        });
+            _logger.LogError(ex, "Error approving budget with OTP");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
     }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error approving budget with OTP");
-        return StatusCode(500, new { success = false, message = "Internal server error" });
-    }
-}
 
     // ==================== REJECT BUDGET ====================
 
@@ -231,6 +236,7 @@ public async Task<IActionResult> ApproveBudgetWithOtp(int id, [FromBody] Approve
         try
         {
             var budgets = await _context.BudgetApprovals
+                .AsNoTracking()
                 .OrderByDescending(b => b.CreatedAt)
                 .Select(b => new BudgetDto
                 {
@@ -256,20 +262,19 @@ public async Task<IActionResult> ApproveBudgetWithOtp(int id, [FromBody] Approve
         }
     }
 
-    // ==================== HELPER: TOTP GENERATION ====================
+    // ==================== HELPER: TOTP GENERATION WITH LOGGING ====================
 
-    private string GenerateTOTP(string secretKey, int offset = 0)
+    private (string otp, long counter, string hash) GenerateTOTPWithLog(string secretKey, int offset)
     {
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var counter = (timestamp / 30) + offset;
-
         var combined = $"{secretKey}:{counter}";
         var combinedBytes = Encoding.UTF8.GetBytes(combined);
+        using var sha = SHA256.Create();
+        var hashBytes = sha.ComputeHash(combinedBytes);
+        var hashString = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
 
-        using var sha = System.Security.Cryptography.SHA256.Create();
-        var hash = sha.ComputeHash(combinedBytes);
-        var hashString = BitConverter.ToString(hash).Replace("-", "").ToLower();
-
+        // Extract first 6 digits from hash
         var tokenValue = "";
         foreach (char c in hashString)
         {
@@ -278,6 +283,6 @@ public async Task<IActionResult> ApproveBudgetWithOtp(int id, [FromBody] Approve
         }
         while (tokenValue.Length < 6)
             tokenValue = "0" + tokenValue;
-        return tokenValue.Substring(0, 6);
+        return (tokenValue.Substring(0, 6), counter, hashString);
     }
 }

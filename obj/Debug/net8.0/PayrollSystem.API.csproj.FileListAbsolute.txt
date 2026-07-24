@@ -114,3 +114,4 @@ D:\PR\PayrollSystem.API\obj\Debug\net8.0\refint\PayrollSystem.API.dll
 D:\PR\PayrollSystem.API\obj\Debug\net8.0\PayrollSystem.API.pdb
 D:\PR\PayrollSystem.API\obj\Debug\net8.0\PayrollSystem.API.genruntimeconfig.cache
 D:\PR\PayrollSystem.API\obj\Debug\net8.0\ref\PayrollSystem.API.dll
+D:\PR\PayrollSystem.API\obj\Debug\net8.0\PayrollSystem.API.sourcelink.json
