@@ -56,18 +56,16 @@ public class DeviceService : IDeviceService
                 };
             }
 
-            // ==================== EMPLOYEE ASSOCIATION ====================
-            // Find or create employee (User) based on EmployeeUsername
+            // Employee association
             var employee = await _context.Users
                 .FirstOrDefaultAsync(u => u.Username == request.EmployeeUsername);
-
             if (employee == null)
             {
                 employee = new User
                 {
                     Username = request.EmployeeUsername,
                     Email = $"{request.EmployeeUsername}@example.com",
-                    PasswordHash = "default", // In production, use hashing
+                    PasswordHash = "default",
                     FirstName = request.EmployeeUsername,
                     LastName = "",
                     IsActive = true,
@@ -77,7 +75,7 @@ public class DeviceService : IDeviceService
                 await _context.SaveChangesAsync();
             }
 
-            // Check if device already registered
+            // Check if device already exists
             var existingDevice = await GetDeviceByAndroidIdAsync(androidId);
             if (existingDevice != null)
             {
@@ -99,10 +97,10 @@ public class DeviceService : IDeviceService
                 };
             }
 
-            // Create device with employee association
+            // Create device
             var device = new Device
             {
-                UserId = employee.Id, // Link to employee
+                UserId = employee.Id,
                 AndroidId = androidId,
                 DeviceModel = deviceModel,
                 SerialNumber = serialNumber,
@@ -118,13 +116,13 @@ public class DeviceService : IDeviceService
             _context.Devices.Add(device);
             await _context.SaveChangesAsync();
 
-            // Generate activation code (expires in 3 minutes)
+            // Generate activation code
             var activationCode = GenerateActivationCode();
             device.ActivationCode = activationCode;
             device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
             await _context.SaveChangesAsync();
 
-            // Generate device token (kept for compatibility)
+            // Generate device token (for compatibility)
             var deviceToken = Guid.NewGuid().ToString();
             device.DeviceToken = deviceToken;
             await _context.SaveChangesAsync();
@@ -308,16 +306,12 @@ public class DeviceService : IDeviceService
 
     public async Task<ChallengeResponse> CreateChallengeAsync(string actionType, int actionId, int employeeId)
     {
-        // Find active device for this employee
         var device = await _context.Devices
             .FirstOrDefaultAsync(d => d.UserId == employeeId && d.Status == "ACTIVE");
 
         if (device == null)
-        {
-            throw new InvalidOperationException("No active device found for this employee. Please register and activate a device first.");
-        }
+            throw new InvalidOperationException("No active device found for this employee.");
 
-        // Generate challenge
         var bytes = new byte[32];
         using (var rng = RandomNumberGenerator.Create())
         {
@@ -347,47 +341,32 @@ public class DeviceService : IDeviceService
 
     public async Task<bool> VerifyChallengeAsync(string installationId, string signature, string challenge)
     {
-        // Find device by installationId
         var device = await _context.Devices
             .FirstOrDefaultAsync(d => d.InstallationId == installationId);
         if (device == null)
-        {
-            _logger.LogWarning($"Device with installationId {installationId} not found");
             return false;
-        }
 
-        // Find the pending challenge
         var challengeEntity = await _context.DeviceChallenges
             .FirstOrDefaultAsync(c => c.Challenge == challenge && c.Status == "PENDING");
         if (challengeEntity == null)
-        {
-            _logger.LogWarning($"Challenge {challenge} not found or already completed/expired");
             return false;
-        }
 
         if (challengeEntity.Expiry < DateTime.UtcNow)
         {
             challengeEntity.Status = "EXPIRED";
             await _context.SaveChangesAsync();
-            _logger.LogWarning($"Challenge {challenge} expired");
             return false;
         }
 
-        // Verify signature using public key
         var isValid = VerifySignature(challenge, signature, device.PublicKey);
         if (!isValid)
-        {
-            _logger.LogWarning($"Signature verification failed for installationId {installationId}");
             return false;
-        }
 
-        // Mark challenge as completed
         challengeEntity.Status = "COMPLETED";
         challengeEntity.CompletedAt = DateTime.UtcNow;
         challengeEntity.DeviceId = device.Id;
         await _context.SaveChangesAsync();
 
-        // Mark the associated action (e.g., budget approval) as approved
         if (challengeEntity.ActionType == "BudgetApproval")
         {
             var budget = await _context.BudgetApprovals.FindAsync(challengeEntity.ActionId);
@@ -396,7 +375,6 @@ public class DeviceService : IDeviceService
                 budget.Status = "APPROVED";
                 budget.ApprovedAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
-                _logger.LogInformation($"Budget {budget.Id} approved by device {device.Id}");
             }
         }
 
@@ -464,9 +442,7 @@ public class DeviceService : IDeviceService
         device.UpdatedAt = DateTime.UtcNow;
 
         if (status == "ACTIVE")
-        {
             device.ActivatedAt = DateTime.UtcNow;
-        }
 
         await _context.SaveChangesAsync();
         return true;

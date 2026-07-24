@@ -30,7 +30,7 @@ public interface IDeviceService
     Task<OTPVerificationResponse> VerifyOTPAsync(OTPVerificationRequest request);
     Task<OTPGenerateResponse> GenerateOTPAsync(int userId, int deviceId);
 
-    // Challenge-Response for actions (correct signature)
+    // Challenge-Response for actions
     Task<ChallengeResponse> CreateChallengeAsync(string actionType, int actionId, int employeeId);
     Task<bool> VerifyChallengeAsync(string installationId, string signature, string challenge);
 
@@ -40,7 +40,7 @@ public interface IDeviceService
     Task<List<Device>> GetUserDevicesAsync(int userId);
     Task<bool> IsDeviceActiveAsync(int deviceId);
     Task<bool> UpdateDeviceStatusAsync(int deviceId, string status);
-    Task<bool> DeleteDeviceAsync(int deviceId);
+    Task<bool> DeleteDeviceAsync(int deviceId);    // <-- Added
 
     Task<Device?> GetActiveDeviceAsync();
     Task<List<Device>> GetAllActiveDevicesAsync();

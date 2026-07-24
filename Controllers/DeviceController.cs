@@ -2,6 +2,8 @@
 using Microsoft.AspNetCore.Mvc;
 using PayrollSystem.API.DTOs;
 using PayrollSystem.API.Services;
+using PayrollSystem.API.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace PayrollSystem.API.Controllers;
 
@@ -11,11 +13,13 @@ public class DeviceController : ControllerBase
 {
     private readonly IDeviceService _deviceService;
     private readonly ILogger<DeviceController> _logger;
+    private readonly AppDbContext _context;
 
-    public DeviceController(IDeviceService deviceService, ILogger<DeviceController> logger)
+    public DeviceController(IDeviceService deviceService, ILogger<DeviceController> logger, AppDbContext context)
     {
         _deviceService = deviceService;
         _logger = logger;
+        _context = context;
     }
 
     // ==================== REGISTRATION ====================
@@ -26,13 +30,9 @@ public class DeviceController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.DeviceCode))
-            {
                 return BadRequest(new { success = false, message = "Device code is required" });
-            }
             if (string.IsNullOrEmpty(request.EmployeeUsername))
-            {
                 return BadRequest(new { success = false, message = "Employee username is required" });
-            }
 
             var result = await _deviceService.RegisterDeviceAsync(request);
             if (result.Success)
@@ -81,6 +81,37 @@ public class DeviceController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting device");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    // ==================== GET ALL DEVICES ====================
+
+    [HttpGet("all")]
+    public async Task<IActionResult> GetAllDevices()
+    {
+        try
+        {
+            var devices = await _context.Devices
+                .OrderByDescending(d => d.CreatedAt)
+                .Select(d => new
+                {
+                    d.Id,
+                    d.DeviceName,
+                    d.DeviceModel,
+                    d.Status,
+                    d.UserId,
+                    d.InstallationId,
+                    d.CreatedAt,
+                    d.AndroidId
+                })
+                .ToListAsync();
+
+            return Ok(new { success = true, data = devices });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting all devices");
             return StatusCode(500, new { success = false, message = "Internal server error" });
         }
     }
@@ -243,74 +274,24 @@ public class DeviceController : ControllerBase
         });
     }
 
-    // ==================== CHALLENGE-RESPONSE FOR ACTIONS ====================
+    // ==================== DELETE DEVICE ====================
 
-    [HttpPost("challenge")]
-    public async Task<IActionResult> CreateChallenge([FromBody] ChallengeRequest request)
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeleteDevice(int id)
     {
         try
         {
-            if (string.IsNullOrEmpty(request.ActionType) || request.ActionId <= 0 || request.EmployeeId <= 0)
-                return BadRequest(new { success = false, message = "ActionType, ActionId, and EmployeeId are required" });
+            var result = await _deviceService.DeleteDeviceAsync(id);
+            if (!result)
+                return NotFound(new { success = false, message = "Device not found" });
 
-            var result = await _deviceService.CreateChallengeAsync(request.ActionType, request.ActionId, request.EmployeeId);
-            if (string.IsNullOrEmpty(result.Challenge))
-                return BadRequest(new { success = false, message = "Failed to create challenge" });
-
-            return Ok(new
-            {
-                success = true,
-                challenge = result.Challenge,
-                expiresIn = result.ExpiresIn
-            });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { success = false, message = ex.Message });
+            return Ok(new { success = true, message = "Device deleted successfully" });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error creating challenge");
+            _logger.LogError(ex, "Error deleting device");
             return StatusCode(500, new { success = false, message = "Internal server error" });
         }
-    }
-
-    [HttpPost("verify-challenge")]
-    public async Task<IActionResult> VerifyChallenge([FromBody] VerifyChallengeRequest request)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(request.InstallationId) ||
-                string.IsNullOrEmpty(request.Signature) ||
-                string.IsNullOrEmpty(request.Challenge))
-            {
-                return BadRequest(new { success = false, message = "InstallationId, signature, and challenge are required" });
-            }
-
-            var isValid = await _deviceService.VerifyChallengeAsync(
-                request.InstallationId,
-                request.Signature,
-                request.Challenge
-            );
-
-            if (isValid)
-                return Ok(new { success = true, message = "Challenge verified and action approved successfully" });
-            else
-                return BadRequest(new { success = false, message = "Challenge verification failed" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error verifying challenge");
-            return StatusCode(500, new { success = false, message = "Internal server error" });
-        }
-    }
-
-    // ==================== TEST ====================
-
-    [HttpGet("test")]
-    public IActionResult Test()
-    {
-        return Ok(new { message = "API is working!", timestamp = DateTime.Now, status = "online" });
     }
 
     // ==================== HELPERS ====================
