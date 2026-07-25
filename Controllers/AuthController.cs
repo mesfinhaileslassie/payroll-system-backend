@@ -32,14 +32,12 @@ public class AuthController : ControllerBase
             if (user == null)
                 return Unauthorized(new { success = false, message = "Invalid username or password" });
 
-            // For demo, compare plaintext; in production use BCrypt
             if (user.PasswordHash != request.Password)
                 return Unauthorized(new { success = false, message = "Invalid username or password" });
 
             if (!user.IsActive)
                 return Unauthorized(new { success = false, message = "Account is inactive" });
 
-            // Generate a simple token (for demo, not JWT)
             var token = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
 
             user.LastLoginAt = DateTime.UtcNow;
@@ -70,31 +68,51 @@ public class AuthController : ControllerBase
     {
         try
         {
-            // Check if username already exists
-            var existingUser = await _context.Users
-                .FirstOrDefaultAsync(u => u.Username == request.Username);
-            if (existingUser != null)
+            // 1. Check username and email
+            if (await _context.Users.AnyAsync(u => u.Username == request.Username))
                 return BadRequest(new { success = false, message = "Username already exists" });
 
-            // Check if email exists
-            var existingEmail = await _context.Users
-                .FirstOrDefaultAsync(u => u.Email == request.Email);
-            if (existingEmail != null)
+            if (await _context.Users.AnyAsync(u => u.Email == request.Email))
                 return BadRequest(new { success = false, message = "Email already exists" });
 
-            // Determine role based on position
-            string role = "Employee"; // default
+            // 2. Validate and check device duplication BEFORE creating user
+            if (!string.IsNullOrEmpty(request.DeviceCode))
+            {
+                var deviceCodeData = JsonSerializer.Deserialize<Dictionary<string, string>>(request.DeviceCode);
+                if (deviceCodeData == null)
+                    return BadRequest(new { success = false, message = "Invalid device code format" });
+
+                var androidId = deviceCodeData.GetValueOrDefault("android_id");
+                var installationId = deviceCodeData.GetValueOrDefault("installation_id");
+                var publicKey = deviceCodeData.GetValueOrDefault("public_key");
+
+                if (string.IsNullOrEmpty(androidId) || string.IsNullOrEmpty(installationId))
+                    return BadRequest(new { success = false, message = "Missing required device information" });
+
+                // Check duplicates
+                if (await _context.Devices.AnyAsync(d => d.AndroidId == androidId))
+                    return BadRequest(new { success = false, message = "This device (Android ID) is already registered." });
+
+                if (await _context.Devices.AnyAsync(d => d.InstallationId == installationId))
+                    return BadRequest(new { success = false, message = "This installation ID is already registered." });
+
+                if (await _context.Devices.AnyAsync(d => d.PublicKey == publicKey))
+                    return BadRequest(new { success = false, message = "Public key already exists." });
+            }
+
+            // 3. Determine role
+            string role = "Employee";
             if (request.Position == "Payroll Officer")
                 role = "PayrollOfficer";
             else if (request.Position == "Finance Manager")
                 role = "FinanceManager";
 
-            // Create user (Employee)
+            // 4. Create user
             var user = new User
             {
                 Username = request.Username,
                 Email = request.Email,
-                PasswordHash = request.Password, // In production, hash with BCrypt
+                PasswordHash = request.Password,
                 FirstName = request.FirstName,
                 LastName = request.LastName,
                 Phone = request.Phone,
@@ -108,7 +126,7 @@ public class AuthController : ControllerBase
             _context.Users.Add(user);
             await _context.SaveChangesAsync();
 
-            // ==================== DEVICE REGISTRATION ====================
+            // 5. Register device (if provided)
             if (!string.IsNullOrEmpty(request.DeviceCode))
             {
                 try
@@ -124,53 +142,51 @@ public class AuthController : ControllerBase
                         var manufacturer = deviceCodeData.GetValueOrDefault("manufacturer");
                         var serialNumber = deviceCodeData.GetValueOrDefault("serial_number");
 
-                        if (!string.IsNullOrEmpty(androidId) && !string.IsNullOrEmpty(installationId))
+                        var device = new Device
                         {
-                            var device = new Device
-                            {
-                                UserId = user.Id,
-                                AndroidId = androidId,
-                                DeviceModel = deviceModel,
-                                SerialNumber = serialNumber,
-                                InstallationId = installationId,
-                                PublicKey = publicKey,
-                                Brand = brand,
-                                Manufacturer = manufacturer,
-                                DeviceName = request.DeviceName ?? deviceModel,
-                                Status = "PENDING",
-                                CreatedAt = DateTime.UtcNow
-                            };
+                            UserId = user.Id,
+                            AndroidId = androidId,
+                            DeviceModel = deviceModel,
+                            SerialNumber = serialNumber,
+                            InstallationId = installationId,
+                            PublicKey = publicKey,
+                            Brand = brand,
+                            Manufacturer = manufacturer,
+                            DeviceName = request.DeviceName ?? deviceModel,
+                            Status = "PENDING",
+                            CreatedAt = DateTime.UtcNow
+                        };
 
-                            _context.Devices.Add(device);
-                            await _context.SaveChangesAsync();
+                        _context.Devices.Add(device);
+                        await _context.SaveChangesAsync();
 
-                            var activationCode = GenerateActivationCode();
-                            device.ActivationCode = activationCode;
-                            device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
-                            await _context.SaveChangesAsync();
+                        var activationCode = GenerateActivationCode();
+                        device.ActivationCode = activationCode;
+                        device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
+                        await _context.SaveChangesAsync();
 
-                            var deviceToken = Guid.NewGuid().ToString();
-                            device.DeviceToken = deviceToken;
-                            await _context.SaveChangesAsync();
+                        var deviceToken = Guid.NewGuid().ToString();
+                        device.DeviceToken = deviceToken;
+                        await _context.SaveChangesAsync();
 
-                            return Ok(new
-                            {
-                                success = true,
-                                message = "Employee registered with device. Please activate the device using the activation code.",
-                                userId = user.Id,
-                                deviceId = device.Id,
-                                activationCode = activationCode
-                            });
-                        }
-                        else
+                        return Ok(new
                         {
-                            _logger.LogWarning("Device registration skipped: missing required fields");
-                        }
+                            success = true,
+                            message = "Employee registered with device. Please activate the device using the activation code.",
+                            userId = user.Id,
+                            deviceId = device.Id,
+                            activationCode = activationCode
+                        });
                     }
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error registering device during employee creation");
+                    // Device registration failed – rollback user creation?
+                    // For consistency, we'll delete the user and return error.
+                    _context.Users.Remove(user);
+                    await _context.SaveChangesAsync();
+                    return StatusCode(500, new { success = false, message = "Failed to register device. Please try again." });
                 }
             }
 
@@ -185,35 +201,6 @@ public class AuthController : ControllerBase
         {
             _logger.LogError(ex, "Error registering employee");
             return StatusCode(500, new { success = false, message = $"Server error: {ex.Message}" });
-        }
-    }
-
-    // ==================== CHANGE PASSWORD ====================
-
-    [HttpPost("change-password")]
-    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
-    {
-        try
-        {
-            var user = await _context.Users.FindAsync(request.UserId);
-            if (user == null)
-                return NotFound(new { success = false, message = "User not found" });
-
-            // Verify current password (plaintext for demo)
-            if (user.PasswordHash != request.CurrentPassword)
-                return BadRequest(new { success = false, message = "Current password is incorrect" });
-
-            // Update password
-            user.PasswordHash = request.NewPassword;
-            user.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
-
-            return Ok(new { success = true, message = "Password updated successfully" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error changing password");
-            return StatusCode(500, new { success = false, message = "Internal server error" });
         }
     }
 

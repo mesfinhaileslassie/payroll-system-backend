@@ -31,13 +31,7 @@ public class DeviceService : IDeviceService
         {
             var deviceCodeData = JsonSerializer.Deserialize<Dictionary<string, string>>(request.DeviceCode);
             if (deviceCodeData == null)
-            {
-                return new DeviceRegistrationResponse
-                {
-                    Success = false,
-                    Message = "Invalid device code format"
-                };
-            }
+                return new DeviceRegistrationResponse { Success = false, Message = "Invalid device code format" };
 
             var androidId = deviceCodeData.GetValueOrDefault("android_id");
             var deviceModel = deviceCodeData.GetValueOrDefault("device_model");
@@ -48,13 +42,7 @@ public class DeviceService : IDeviceService
             var manufacturer = deviceCodeData.GetValueOrDefault("manufacturer");
 
             if (string.IsNullOrEmpty(androidId) || string.IsNullOrEmpty(installationId))
-            {
-                return new DeviceRegistrationResponse
-                {
-                    Success = false,
-                    Message = "Missing required device information"
-                };
-            }
+                return new DeviceRegistrationResponse { Success = false, Message = "Missing required device information" };
 
             // Employee association
             var employee = await _context.Users
@@ -75,27 +63,19 @@ public class DeviceService : IDeviceService
                 await _context.SaveChangesAsync();
             }
 
-            // Check if device already exists
-            var existingDevice = await GetDeviceByAndroidIdAsync(androidId);
-            if (existingDevice != null)
-            {
-                return new DeviceRegistrationResponse
-                {
-                    Success = false,
-                    Message = "Device already registered"
-                };
-            }
+            // Check uniqueness of all identifiers
+            var existingByAndroid = await GetDeviceByAndroidIdAsync(androidId);
+            if (existingByAndroid != null)
+                return new DeviceRegistrationResponse { Success = false, Message = "This device (Android ID) is already registered." };
 
-            var existingInstallation = await _context.Devices
-                .FirstOrDefaultAsync(d => d.InstallationId == installationId);
-            if (existingInstallation != null)
-            {
-                return new DeviceRegistrationResponse
-                {
-                    Success = false,
-                    Message = "Installation ID already used"
-                };
-            }
+            var existingByInstallation = await GetDeviceByInstallationIdAsync(installationId);
+            if (existingByInstallation != null)
+                return new DeviceRegistrationResponse { Success = false, Message = "This installation ID is already registered." };
+
+            var existingByPublicKey = await _context.Devices
+                .FirstOrDefaultAsync(d => d.PublicKey == publicKey);
+            if (existingByPublicKey != null)
+                return new DeviceRegistrationResponse { Success = false, Message = "Public key already exists." };
 
             // Create device
             var device = new Device
@@ -139,11 +119,7 @@ public class DeviceService : IDeviceService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error registering device");
-            return new DeviceRegistrationResponse
-            {
-                Success = false,
-                Message = $"Error registering device: {ex.Message}"
-            };
+            return new DeviceRegistrationResponse { Success = false, Message = $"Error registering device: {ex.Message}" };
         }
     }
 
@@ -166,6 +142,14 @@ public class DeviceService : IDeviceService
         return device;
     }
 
+    // ==================== GET DEVICE BY INSTALLATION ID ====================
+
+    public async Task<Device?> GetDeviceByInstallationIdAsync(string installationId)
+    {
+        return await _context.Devices
+            .FirstOrDefaultAsync(d => d.InstallationId == installationId);
+    }
+
     // ==================== ACTIVATION ====================
 
     public async Task<ActivationResponse> ActivateDeviceAsync(ActivationRequest request)
@@ -174,40 +158,16 @@ public class DeviceService : IDeviceService
         {
             var device = await GetDeviceByIdAsync(request.DeviceId);
             if (device == null)
-            {
-                return new ActivationResponse
-                {
-                    Success = false,
-                    Message = "Device not found"
-                };
-            }
+                return new ActivationResponse { Success = false, Message = "Device not found" };
 
             if (device.Status == "ACTIVE")
-            {
-                return new ActivationResponse
-                {
-                    Success = false,
-                    Message = "Device already active"
-                };
-            }
+                return new ActivationResponse { Success = false, Message = "Device already active" };
 
             if (device.ActivationCode != request.ActivationCode)
-            {
-                return new ActivationResponse
-                {
-                    Success = false,
-                    Message = "Invalid activation code"
-                };
-            }
+                return new ActivationResponse { Success = false, Message = "Invalid activation code" };
 
             if (device.ActivationCodeExpiry.HasValue && DateTime.UtcNow > device.ActivationCodeExpiry.Value)
-            {
-                return new ActivationResponse
-                {
-                    Success = false,
-                    Message = "Activation code has expired. Please register again."
-                };
-            }
+                return new ActivationResponse { Success = false, Message = "Activation code has expired. Please register again." };
 
             device.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
@@ -222,11 +182,7 @@ public class DeviceService : IDeviceService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error activating device");
-            return new ActivationResponse
-            {
-                Success = false,
-                Message = $"Error activating device: {ex.Message}"
-            };
+            return new ActivationResponse { Success = false, Message = $"Error activating device: {ex.Message}" };
         }
     }
 
@@ -273,7 +229,15 @@ public class DeviceService : IDeviceService
             device.DeviceToken = deviceToken;
             device.SecretKey = secretKey;
             device.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex) when (ex.InnerException?.Message?.Contains("Duplicate entry") == true)
+            {
+                _logger.LogError(ex, "Duplicate secret key or device token");
+                throw new InvalidOperationException("Device token or secret key already exists. Please try activating again.");
+            }
         }
     }
 
@@ -288,108 +252,6 @@ public class DeviceService : IDeviceService
     {
         return await _context.Devices
             .FirstOrDefaultAsync(d => d.SecretKey == secretKey);
-    }
-
-    // ==================== OTP VERIFICATION (DEPRECATED) ====================
-
-    public async Task<OTPVerificationResponse> VerifyOTPAsync(OTPVerificationRequest request)
-    {
-        return await Task.FromResult(new OTPVerificationResponse
-        {
-            Success = false,
-            Message = "OTP verification is deprecated. Use challenge-response.",
-            Valid = false
-        });
-    }
-
-    // ==================== CHALLENGE-RESPONSE FOR ACTIONS ====================
-
-    public async Task<ChallengeResponse> CreateChallengeAsync(string actionType, int actionId, int employeeId)
-    {
-        var device = await _context.Devices
-            .FirstOrDefaultAsync(d => d.UserId == employeeId && d.Status == "ACTIVE");
-
-        if (device == null)
-            throw new InvalidOperationException("No active device found for this employee.");
-
-        var bytes = new byte[32];
-        using (var rng = RandomNumberGenerator.Create())
-        {
-            rng.GetBytes(bytes);
-        }
-        var challengeStr = Convert.ToBase64String(bytes);
-
-        var deviceChallenge = new DeviceChallenge
-        {
-            Challenge = challengeStr,
-            ActionType = actionType,
-            ActionId = actionId,
-            Expiry = DateTime.UtcNow.AddMinutes(5),
-            Status = "PENDING",
-            CreatedAt = DateTime.UtcNow,
-            DeviceId = device.Id
-        };
-        _context.DeviceChallenges.Add(deviceChallenge);
-        await _context.SaveChangesAsync();
-
-        return new ChallengeResponse
-        {
-            Challenge = challengeStr,
-            ExpiresIn = 300
-        };
-    }
-
-    public async Task<bool> VerifyChallengeAsync(string installationId, string signature, string challenge)
-    {
-        var device = await _context.Devices
-            .FirstOrDefaultAsync(d => d.InstallationId == installationId);
-        if (device == null)
-            return false;
-
-        var challengeEntity = await _context.DeviceChallenges
-            .FirstOrDefaultAsync(c => c.Challenge == challenge && c.Status == "PENDING");
-        if (challengeEntity == null)
-            return false;
-
-        if (challengeEntity.Expiry < DateTime.UtcNow)
-        {
-            challengeEntity.Status = "EXPIRED";
-            await _context.SaveChangesAsync();
-            return false;
-        }
-
-        var isValid = VerifySignature(challenge, signature, device.PublicKey);
-        if (!isValid)
-            return false;
-
-        challengeEntity.Status = "COMPLETED";
-        challengeEntity.CompletedAt = DateTime.UtcNow;
-        challengeEntity.DeviceId = device.Id;
-        await _context.SaveChangesAsync();
-
-        if (challengeEntity.ActionType == "BudgetApproval")
-        {
-            var budget = await _context.BudgetApprovals.FindAsync(challengeEntity.ActionId);
-            if (budget != null && budget.Status == "PENDING")
-            {
-                budget.Status = "APPROVED";
-                budget.ApprovedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync();
-            }
-        }
-
-        return true;
-    }
-
-    // ==================== OTP GENERATION (DEPRECATED) ====================
-
-    public async Task<OTPGenerateResponse> GenerateOTPAsync(int userId, int deviceId)
-    {
-        return await Task.FromResult(new OTPGenerateResponse
-        {
-            Success = false,
-            Message = "OTP generation is deprecated. Use challenge-response."
-        });
     }
 
     // ==================== DEVICE MANAGEMENT ====================

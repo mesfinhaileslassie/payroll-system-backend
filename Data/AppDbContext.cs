@@ -6,16 +6,13 @@ namespace PayrollSystem.API.Data;
 
 public class AppDbContext : DbContext
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
-    {
-    }
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
     public DbSet<User> Users { get; set; }
     public DbSet<Device> Devices { get; set; }
     public DbSet<DeviceCode> DeviceCodes { get; set; }
     public DbSet<BudgetApproval> BudgetApprovals { get; set; }
     public DbSet<AuditLog> AuditLogs { get; set; }
-    public DbSet<DeviceChallenge> DeviceChallenges { get; set; } // NEW
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -33,6 +30,17 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Device>()
             .HasIndex(d => d.DeviceToken)
             .IsUnique();
+
+        // NEW: Ensure SecretKey and PublicKey are unique
+        modelBuilder.Entity<Device>()
+            .HasIndex(d => d.SecretKey)
+            .IsUnique()
+            .HasDatabaseName("IX_Devices_SecretKey");
+
+        modelBuilder.Entity<Device>()
+            .HasIndex(d => d.PublicKey)
+            .IsUnique()
+            .HasDatabaseName("IX_Devices_PublicKey");
 
         // User configuration
         modelBuilder.Entity<User>()
@@ -66,12 +74,5 @@ public class AppDbContext : DbContext
             .WithMany(u => u.BudgetApprovals)
             .HasForeignKey(b => b.UserId)
             .OnDelete(DeleteBehavior.Cascade);
-
-        // DeviceChallenge relationship
-        modelBuilder.Entity<DeviceChallenge>()
-            .HasOne(dc => dc.Device)
-            .WithMany()
-            .HasForeignKey(dc => dc.DeviceId)
-            .OnDelete(DeleteBehavior.SetNull);
     }
 }

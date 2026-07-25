@@ -116,6 +116,49 @@ public class DeviceController : ControllerBase
         }
     }
 
+    // ==================== CHECK DEVICE REGISTRATION ====================
+
+    [HttpGet("check-registration")]
+    public async Task<IActionResult> CheckDeviceRegistration([FromQuery] string installationId)
+    {
+        if (string.IsNullOrEmpty(installationId))
+            return BadRequest(new { success = false, message = "Installation ID is required" });
+
+        var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
+        if (device == null)
+            return Ok(new { registered = false, status = (string?)null, deviceId = (int?)null });
+
+        return Ok(new { registered = true, status = device.Status, deviceId = device.Id });
+    }
+
+    // ==================== GET DEVICE BY INSTALLATION ID ====================
+
+    [HttpGet("by-installation/{installationId}")]
+    public async Task<IActionResult> GetDeviceByInstallationId(string installationId)
+    {
+        if (string.IsNullOrEmpty(installationId))
+            return BadRequest(new { success = false, message = "Installation ID is required" });
+
+        var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
+        if (device == null)
+            return NotFound(new { success = false, message = "Device not found" });
+
+        return Ok(new
+        {
+            success = true,
+            data = new
+            {
+                device.Id,
+                device.AndroidId,
+                device.DeviceModel,
+                device.DeviceName,
+                device.Status,
+                device.InstallationId,
+                device.UserId
+            }
+        });
+    }
+
     // ==================== ACTIVATION CODE LOOKUP ====================
 
     [HttpGet("get-device-id/{activationCode}")]
@@ -261,19 +304,6 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== OTP VERIFICATION (DEPRECATED) ====================
-
-    [HttpPost("verify-otp")]
-    public IActionResult VerifyOTP()
-    {
-        return BadRequest(new
-        {
-            success = false,
-            message = "OTP verification is deprecated. Please use the challenge-response flow.",
-            valid = false
-        });
-    }
-
     // ==================== DELETE DEVICE ====================
 
     [HttpDelete("{id}")]
@@ -292,6 +322,14 @@ public class DeviceController : ControllerBase
             _logger.LogError(ex, "Error deleting device");
             return StatusCode(500, new { success = false, message = "Internal server error" });
         }
+    }
+
+    // ==================== TEST ====================
+
+    [HttpGet("test")]
+    public IActionResult Test()
+    {
+        return Ok(new { message = "API is working!", timestamp = DateTime.Now, status = "online" });
     }
 
     // ==================== HELPERS ====================
