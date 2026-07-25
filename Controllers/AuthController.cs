@@ -182,8 +182,6 @@ public class AuthController : ControllerBase
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error registering device during employee creation");
-                    // Device registration failed – rollback user creation?
-                    // For consistency, we'll delete the user and return error.
                     _context.Users.Remove(user);
                     await _context.SaveChangesAsync();
                     return StatusCode(500, new { success = false, message = "Failed to register device. Please try again." });
@@ -201,6 +199,35 @@ public class AuthController : ControllerBase
         {
             _logger.LogError(ex, "Error registering employee");
             return StatusCode(500, new { success = false, message = $"Server error: {ex.Message}" });
+        }
+    }
+
+    // ==================== CHANGE PASSWORD ====================
+
+    [HttpPost("change-password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        try
+        {
+            var user = await _context.Users.FindAsync(request.UserId);
+            if (user == null)
+                return NotFound(new { success = false, message = "User not found" });
+
+            // Verify current password (plaintext for demo)
+            if (user.PasswordHash != request.CurrentPassword)
+                return BadRequest(new { success = false, message = "Current password is incorrect" });
+
+            // Update password
+            user.PasswordHash = request.NewPassword;
+            user.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { success = true, message = "Password updated successfully" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error changing password");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
         }
     }
 
