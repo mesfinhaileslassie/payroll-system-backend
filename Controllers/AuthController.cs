@@ -4,7 +4,6 @@ using Microsoft.EntityFrameworkCore;
 using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
 using PayrollSystem.API.Models;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -83,6 +82,13 @@ public class AuthController : ControllerBase
             if (existingEmail != null)
                 return BadRequest(new { success = false, message = "Email already exists" });
 
+            // Determine role based on position
+            string role = "Employee"; // default
+            if (request.Position == "Payroll Officer")
+                role = "PayrollOfficer";
+            else if (request.Position == "Finance Manager")
+                role = "FinanceManager";
+
             // Create user (Employee)
             var user = new User
             {
@@ -93,10 +99,8 @@ public class AuthController : ControllerBase
                 LastName = request.LastName,
                 Phone = request.Phone,
                 Gender = request.Gender,
-                Department = request.Department,
                 Position = request.Position,
-                EmployeeId = request.EmployeeId,
-                Role = "Employee",
+                Role = role,
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
@@ -105,7 +109,6 @@ public class AuthController : ControllerBase
             await _context.SaveChangesAsync();
 
             // ==================== DEVICE REGISTRATION ====================
-            // If deviceCode is provided, register the device and associate it with the employee
             if (!string.IsNullOrEmpty(request.DeviceCode))
             {
                 try
@@ -141,13 +144,11 @@ public class AuthController : ControllerBase
                             _context.Devices.Add(device);
                             await _context.SaveChangesAsync();
 
-                            // Generate activation code (expires in 3 minutes)
                             var activationCode = GenerateActivationCode();
                             device.ActivationCode = activationCode;
                             device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
                             await _context.SaveChangesAsync();
 
-                            // Generate device token (for compatibility)
                             var deviceToken = Guid.NewGuid().ToString();
                             device.DeviceToken = deviceToken;
                             await _context.SaveChangesAsync();
@@ -170,11 +171,9 @@ public class AuthController : ControllerBase
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error registering device during employee creation");
-                    // Continue – employee created, but device registration failed
                 }
             }
 
-            // If no device or device registration failed, return success without device
             return Ok(new
             {
                 success = true,
@@ -186,6 +185,35 @@ public class AuthController : ControllerBase
         {
             _logger.LogError(ex, "Error registering employee");
             return StatusCode(500, new { success = false, message = $"Server error: {ex.Message}" });
+        }
+    }
+
+    // ==================== CHANGE PASSWORD ====================
+
+    [HttpPost("change-password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        try
+        {
+            var user = await _context.Users.FindAsync(request.UserId);
+            if (user == null)
+                return NotFound(new { success = false, message = "User not found" });
+
+            // Verify current password (plaintext for demo)
+            if (user.PasswordHash != request.CurrentPassword)
+                return BadRequest(new { success = false, message = "Current password is incorrect" });
+
+            // Update password
+            user.PasswordHash = request.NewPassword;
+            user.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { success = true, message = "Password updated successfully" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error changing password");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
         }
     }
 
