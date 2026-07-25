@@ -332,6 +332,41 @@ public class DeviceController : ControllerBase
         return Ok(new { message = "API is working!", timestamp = DateTime.Now, status = "online" });
     }
 
+
+
+    [HttpPut("{id}")]
+public async Task<IActionResult> UpdateDevice(int id, [FromBody] UpdateDeviceRequest request)
+{
+    try
+    {
+        if (id <= 0 || string.IsNullOrEmpty(request.DeviceName))
+            return BadRequest(new { success = false, message = "Invalid request" });
+
+        var device = await _deviceService.GetDeviceByIdAsync(id);
+        if (device == null)
+            return NotFound(new { success = false, message = "Device not found" });
+
+        // Update allowed fields
+        device.DeviceName = request.DeviceName;
+
+        // Only allow valid status values
+        if (!string.IsNullOrEmpty(request.Status) && (request.Status == "ACTIVE" || request.Status == "INACTIVE" || request.Status == "PENDING"))
+        {
+            device.Status = request.Status;
+        }
+
+        device.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        return Ok(new { success = true, message = "Device updated successfully" });
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error updating device");
+        return StatusCode(500, new { success = false, message = "Internal server error" });
+    }
+}
+
     // ==================== HELPERS ====================
 
     private string GenerateChallenge()

@@ -22,4 +22,7 @@ public class BudgetDto
 
     [JsonPropertyName("createdAt")]
     public DateTime CreatedAt { get; set; }
+
+    [JsonPropertyName("approvedAt")]
+    public DateTime? ApprovedAt { get; set; }  // Added this property
 }

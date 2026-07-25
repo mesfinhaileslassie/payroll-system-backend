@@ -67,7 +67,7 @@ public class BudgetController : ControllerBase
         }
     }
 
-    // ==================== APPROVE WITH OTP (Simplified – only username + OTP) ====================
+    // ==================== APPROVE WITH OTP ====================
 
     [HttpPost("{id}/approve-with-otp")]
     public async Task<IActionResult> ApproveBudgetWithOtp(int id, [FromBody] ApproveWithOtpRequest request)
@@ -80,7 +80,7 @@ public class BudgetController : ControllerBase
             if (employee == null)
                 return BadRequest(new { success = false, message = "Employee not found" });
 
-            // 2. Find active devices for this employee
+            // 2. Find active devices for this employee (only ACTIVE status)
             var devices = await _context.Devices
                 .Where(d => d.UserId == employee.Id && d.Status == "ACTIVE")
                 .ToListAsync();
@@ -96,7 +96,7 @@ public class BudgetController : ControllerBase
             if (budget.Status != "PENDING")
                 return BadRequest(new { success = false, message = $"Budget is already {budget.Status}" });
 
-            // 4. Validate OTP against all devices
+            // 4. Validate OTP against all active devices
             bool otpValid = false;
             Device? matchingDevice = null;
 
@@ -108,11 +108,11 @@ public class BudgetController : ControllerBase
                 _logger.LogInformation($"🔍 Checking device {device.Id}, SecretKey: {device.SecretKey}");
                 _logger.LogInformation($"📥 Client OTP: {request.Otp}");
 
-                var (serverOtp, counter, hash) = GenerateTOTPWithLog(device.SecretKey, 0);
-                var (prevOtp, _, _) = GenerateTOTPWithLog(device.SecretKey, -1);
-                var (nextOtp, _, _) = GenerateTOTPWithLog(device.SecretKey, 1);
+                var serverOtp = GenerateTOTP(device.SecretKey, 0);
+                var prevOtp = GenerateTOTP(device.SecretKey, -1);
+                var nextOtp = GenerateTOTP(device.SecretKey, 1);
 
-                _logger.LogInformation($"🔑 Device {device.Id}: Current counter={counter}, hash={hash}, OTP={serverOtp}");
+                _logger.LogInformation($"🔑 Device {device.Id}: Current OTP={serverOtp}, Prev={prevOtp}, Next={nextOtp}");
 
                 if (serverOtp == request.Otp || prevOtp == request.Otp || nextOtp == request.Otp)
                 {
@@ -204,7 +204,8 @@ public class BudgetController : ControllerBase
                     Amount = b.Amount,
                     Description = b.Description,
                     Status = b.Status,
-                    CreatedAt = b.CreatedAt
+                    CreatedAt = b.CreatedAt,
+                    ApprovedAt = b.ApprovedAt
                 })
                 .ToListAsync();
 
@@ -234,7 +235,8 @@ public class BudgetController : ControllerBase
                     Amount = b.Amount,
                     Description = b.Description,
                     Status = b.Status,
-                    CreatedAt = b.CreatedAt
+                    CreatedAt = b.CreatedAt,
+                    ApprovedAt = b.ApprovedAt
                 })
                 .ToListAsync();
 
@@ -247,17 +249,19 @@ public class BudgetController : ControllerBase
         }
     }
 
-    // ==================== HELPER: TOTP GENERATION WITH LOGGING ====================
+    // ==================== HELPER: TOTP GENERATION ====================
 
-    private (string otp, long counter, string hash) GenerateTOTPWithLog(string secretKey, int offset)
+    private string GenerateTOTP(string secretKey, int offset = 0)
     {
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var counter = (timestamp / 30) + offset;
+
         var combined = $"{secretKey}:{counter}";
         var combinedBytes = Encoding.UTF8.GetBytes(combined);
+
         using var sha = SHA256.Create();
-        var hashBytes = sha.ComputeHash(combinedBytes);
-        var hashString = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+        var hash = sha.ComputeHash(combinedBytes);
+        var hashString = BitConverter.ToString(hash).Replace("-", "").ToLower();
 
         var tokenValue = "";
         foreach (char c in hashString)
@@ -267,6 +271,6 @@ public class BudgetController : ControllerBase
         }
         while (tokenValue.Length < 6)
             tokenValue = "0" + tokenValue;
-        return (tokenValue.Substring(0, 6), counter, hashString);
+        return tokenValue.Substring(0, 6);
     }
 }
