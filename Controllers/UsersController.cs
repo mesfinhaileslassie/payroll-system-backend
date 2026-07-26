@@ -19,6 +19,36 @@ public class UsersController : ControllerBase
         _logger = logger;
     }
 
+    // ✅ SPECIFIC ROUTE FIRST: GET api/users/employees
+    [HttpGet("employees")]
+    public async Task<IActionResult> GetEmployees()
+    {
+        try
+        {
+            var employees = await _context.Users
+                .Where(u => u.Role == "Employee")
+                .Select(u => new
+                {
+                    u.Id,
+                    u.Username,
+                    u.FirstName,
+                    u.LastName,
+                    u.Email,
+                    u.Phone,
+                    u.IsActive
+                })
+                .ToListAsync();
+
+            return Ok(new { success = true, data = employees });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting employees");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    // ✅ GENERIC ROUTE SECOND: GET api/users/{id}
     [HttpGet("{id}")]
     public async Task<IActionResult> GetUser(int id)
     {

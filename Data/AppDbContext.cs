@@ -13,7 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<DeviceCode> DeviceCodes { get; set; }
     public DbSet<BudgetApproval> BudgetApprovals { get; set; }
     public DbSet<AuditLog> AuditLogs { get; set; }
-
+    public DbSet<SalaryPayment> SalaryPayments { get; set; }
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -73,6 +73,12 @@ public class AppDbContext : DbContext
             .HasOne(b => b.User)
             .WithMany(u => u.BudgetApprovals)
             .HasForeignKey(b => b.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<SalaryPayment>()
+            .HasOne(sp => sp.Employee)
+            .WithMany()
+            .HasForeignKey(sp => sp.EmployeeId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
