@@ -1,9 +1,10 @@
 // Controllers/DeviceController.cs
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
 using PayrollSystem.API.Services;
-using PayrollSystem.API.Data;
-using Microsoft.EntityFrameworkCore;
 
 namespace PayrollSystem.API.Controllers;
 
@@ -14,12 +15,14 @@ public class DeviceController : ControllerBase
     private readonly IDeviceService _deviceService;
     private readonly ILogger<DeviceController> _logger;
     private readonly AppDbContext _context;
+    private readonly IMemoryCache _cache;
 
-    public DeviceController(IDeviceService deviceService, ILogger<DeviceController> logger, AppDbContext context)
+    public DeviceController(IDeviceService deviceService, ILogger<DeviceController> logger, AppDbContext context, IMemoryCache cache)
     {
         _deviceService = deviceService;
         _logger = logger;
         _context = context;
+        _cache = cache; // ✅ parameter name is 'cache', field is '_cache'
     }
 
     // ==================== REGISTRATION ====================
@@ -188,7 +191,7 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== ACTIVATE DEVICE (step 1) ====================
+    // ==================== ACTIVATE DEVICE ====================
 
     [HttpPost("activate")]
     public async Task<IActionResult> ActivateDevice([FromBody] ActivationRequest request)
@@ -202,7 +205,6 @@ public class DeviceController : ControllerBase
             if (!result.Success)
                 return BadRequest(result);
 
-            // Generate challenge for activation verification
             var challenge = GenerateChallenge();
             await _deviceService.StoreChallengeAsync(request.DeviceId, challenge);
 
@@ -222,7 +224,7 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== GET CHALLENGE (for activation) ====================
+    // ==================== GET CHALLENGE ====================
 
     [HttpGet("{id}/challenge")]
     public async Task<IActionResult> GetChallenge(int id)
@@ -250,7 +252,7 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== VERIFY SIGNATURE (activation) ====================
+    // ==================== VERIFY SIGNATURE ====================
 
     [HttpPost("verify-signature")]
     public async Task<IActionResult> VerifySignature([FromBody] SignatureVerificationRequest request)
@@ -276,11 +278,9 @@ public class DeviceController : ControllerBase
             if (!isValid)
                 return BadRequest(new { success = false, message = "Signature verification failed" });
 
-            // Activate device
             await _deviceService.UpdateDeviceStatusAsync(request.DeviceId, "ACTIVE");
             await _deviceService.MarkDeviceAsTrustedAsync(request.DeviceId);
 
-            // Generate new credentials (kept for compatibility)
             var deviceToken = GenerateDeviceToken();
             var secretKey = GenerateSecretKey();
             await _deviceService.UpdateDeviceCredentialsAsync(request.DeviceId, deviceToken, secretKey);
@@ -300,6 +300,38 @@ public class DeviceController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error verifying signature");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    // ==================== UPDATE DEVICE ====================
+
+    [HttpPut("{id}")]
+    public async Task<IActionResult> UpdateDevice(int id, [FromBody] UpdateDeviceRequest request)
+    {
+        try
+        {
+            if (id <= 0 || string.IsNullOrEmpty(request.DeviceName))
+                return BadRequest(new { success = false, message = "Invalid request" });
+
+            var device = await _deviceService.GetDeviceByIdAsync(id);
+            if (device == null)
+                return NotFound(new { success = false, message = "Device not found" });
+
+            device.DeviceName = request.DeviceName;
+            if (!string.IsNullOrEmpty(request.Status) && (request.Status == "ACTIVE" || request.Status == "INACTIVE" || request.Status == "PENDING"))
+            {
+                device.Status = request.Status;
+            }
+
+            device.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { success = true, message = "Device updated successfully" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating device");
             return StatusCode(500, new { success = false, message = "Internal server error" });
         }
     }
@@ -324,6 +356,20 @@ public class DeviceController : ControllerBase
         }
     }
 
+    // ==================== STORE OTP COUNTER (NEW) ====================
+
+    [HttpPost("store-counter")]
+    public IActionResult StoreCounter([FromBody] StoreCounterRequest request)
+    {
+        if (string.IsNullOrEmpty(request.InstallationId))
+            return BadRequest(new { success = false, message = "Installation ID is required" });
+
+        var cacheKey = $"otp_counter_{request.InstallationId}";
+        _cache.Set(cacheKey, request.Counter, TimeSpan.FromSeconds(60));
+
+        return Ok(new { success = true, message = "Counter stored successfully" });
+    }
+
     // ==================== TEST ====================
 
     [HttpGet("test")]
@@ -331,41 +377,6 @@ public class DeviceController : ControllerBase
     {
         return Ok(new { message = "API is working!", timestamp = DateTime.Now, status = "online" });
     }
-
-
-
-    [HttpPut("{id}")]
-public async Task<IActionResult> UpdateDevice(int id, [FromBody] UpdateDeviceRequest request)
-{
-    try
-    {
-        if (id <= 0 || string.IsNullOrEmpty(request.DeviceName))
-            return BadRequest(new { success = false, message = "Invalid request" });
-
-        var device = await _deviceService.GetDeviceByIdAsync(id);
-        if (device == null)
-            return NotFound(new { success = false, message = "Device not found" });
-
-        // Update allowed fields
-        device.DeviceName = request.DeviceName;
-
-        // Only allow valid status values
-        if (!string.IsNullOrEmpty(request.Status) && (request.Status == "ACTIVE" || request.Status == "INACTIVE" || request.Status == "PENDING"))
-        {
-            device.Status = request.Status;
-        }
-
-        device.UpdatedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
-
-        return Ok(new { success = true, message = "Device updated successfully" });
-    }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error updating device");
-        return StatusCode(500, new { success = false, message = "Internal server error" });
-    }
-}
 
     // ==================== HELPERS ====================
 

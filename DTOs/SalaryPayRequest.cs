@@ -11,8 +11,11 @@ public class SalaryPayRequest
     [JsonPropertyName("amount")]
     public decimal Amount { get; set; }
 
+    [JsonPropertyName("paymentMonth")]
+    public string PaymentMonth { get; set; } = string.Empty;
+
     [JsonPropertyName("username")]
-    public string Username { get; set; } = string.Empty;  // Finance Manager's username
+    public string Username { get; set; } = string.Empty;
 
     [JsonPropertyName("otp")]
     public string Otp { get; set; } = string.Empty;

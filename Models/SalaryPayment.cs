@@ -9,13 +9,17 @@ public class SalaryPayment
     public int Id { get; set; }
 
     [Required]
-    public int EmployeeId { get; set; }  // User.Id of the employee being paid
+    public int EmployeeId { get; set; }
 
     [Required]
     public decimal Amount { get; set; }
 
+    [Required]
+    [MaxLength(7)]
+    public string PaymentMonth { get; set; } = string.Empty;
+
     [MaxLength(20)]
-    public string Status { get; set; } = "PENDING"; // PENDING, APPROVED
+    public string Status { get; set; } = "PENDING";
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
