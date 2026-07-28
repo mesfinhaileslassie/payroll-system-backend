@@ -63,7 +63,7 @@ public class DeviceService : IDeviceService
                 await _context.SaveChangesAsync();
             }
 
-            // Check uniqueness of all identifiers
+            // Check uniqueness
             var existingByAndroid = await GetDeviceByAndroidIdAsync(androidId);
             if (existingByAndroid != null)
                 return new DeviceRegistrationResponse { Success = false, Message = "This device (Android ID) is already registered." };
@@ -77,7 +77,6 @@ public class DeviceService : IDeviceService
             if (existingByPublicKey != null)
                 return new DeviceRegistrationResponse { Success = false, Message = "Public key already exists." };
 
-            // Create device
             var device = new Device
             {
                 UserId = employee.Id,
@@ -96,13 +95,11 @@ public class DeviceService : IDeviceService
             _context.Devices.Add(device);
             await _context.SaveChangesAsync();
 
-            // Generate activation code
             var activationCode = GenerateActivationCode();
             device.ActivationCode = activationCode;
             device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
             await _context.SaveChangesAsync();
 
-            // Generate device token (for compatibility)
             var deviceToken = Guid.NewGuid().ToString();
             device.DeviceToken = deviceToken;
             await _context.SaveChangesAsync();
@@ -130,13 +127,10 @@ public class DeviceService : IDeviceService
         var device = await _context.Devices
             .FirstOrDefaultAsync(d => d.ActivationCode == activationCode);
 
-        if (device != null && device.ActivationCodeExpiry.HasValue)
+        if (device != null && device.ActivationCodeExpiry.HasValue && DateTime.UtcNow > device.ActivationCodeExpiry.Value)
         {
-            if (DateTime.UtcNow > device.ActivationCodeExpiry.Value)
-            {
-                _logger.LogWarning($"Activation code {activationCode} has expired");
-                return null;
-            }
+            _logger.LogWarning($"Activation code {activationCode} has expired");
+            return null;
         }
 
         return device;
@@ -196,8 +190,7 @@ public class DeviceService : IDeviceService
 
     public async Task<string> GetStoredChallengeAsync(int deviceId)
     {
-        var challenge = _cache.Get<string>($"challenge_{deviceId}");
-        return await Task.FromResult(challenge ?? string.Empty);
+        return await Task.FromResult(_cache.Get<string>($"challenge_{deviceId}") ?? string.Empty);
     }
 
     public async Task ClearChallengeAsync(int deviceId)
@@ -206,18 +199,42 @@ public class DeviceService : IDeviceService
         await Task.CompletedTask;
     }
 
+    // ==================== SIGNATURE VERIFICATION (RSA + FALLBACK) ====================
+
     public bool VerifySignature(string challenge, string signature, string publicKey)
     {
+        // 1. Try real RSA verification (for new devices)
         try
         {
-            var decoded = Convert.FromBase64String(signature);
-            var decodedString = Encoding.UTF8.GetString(decoded);
-            return decodedString.Contains(challenge);
+            if (string.IsNullOrEmpty(publicKey))
+                return false;
+
+            using var rsa = RSA.Create();
+            rsa.ImportFromPem(publicKey);
+
+            var challengeBytes = Encoding.UTF8.GetBytes(challenge);
+            var sigBytes = Convert.FromBase64String(signature);
+
+            return rsa.VerifyData(
+                challengeBytes,
+                sigBytes,
+                HashAlgorithmName.SHA256,
+                RSASignaturePadding.Pkcs1
+            );
         }
-        catch (Exception ex)
+        catch
         {
-            _logger.LogError(ex, "Error verifying signature");
-            return false;
+            // 2. Fallback to the old dummy check for existing devices with fake keys
+            try
+            {
+                var decoded = Convert.FromBase64String(signature);
+                var decodedString = Encoding.UTF8.GetString(decoded);
+                return decodedString.Contains(challenge);
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 
@@ -324,7 +341,10 @@ public class DeviceService : IDeviceService
 
     private string GenerateActivationCode()
     {
-        var random = new Random();
-        return random.Next(100000, 999999).ToString();
+        using var rng = RandomNumberGenerator.Create();
+        var bytes = new byte[4];
+        rng.GetBytes(bytes);
+        var value = BitConverter.ToUInt32(bytes, 0) % 900000 + 100000;
+        return value.ToString("D6");
     }
 }

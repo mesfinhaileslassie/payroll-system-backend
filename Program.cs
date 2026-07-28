@@ -8,7 +8,7 @@ using PayrollSystem.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// Add services
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -16,16 +16,22 @@ builder.Services.AddSwaggerGen(c =>
     c.SwaggerDoc("v1", new() { Title = "Payroll System API", Version = "v1" });
 });
 
-// Add Database Context
+// Database
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
 
-// Add Memory Cache for OTP
+// Memory Cache
 builder.Services.AddMemoryCache();
 
-// Add JWT Authentication
-var key = Encoding.ASCII.GetBytes(builder.Configuration["JwtSettings:SecretKey"] ?? "YourSuperSecretKeyHereAtLeast32Chars");
+// ==================== JWT AUTHENTICATION ====================
+var secret = builder.Configuration["JwtSettings:SecretKey"]
+    ?? throw new InvalidOperationException("JwtSettings:SecretKey is not configured. Set it via environment variable or secrets.");
+if (Encoding.UTF8.GetByteCount(secret) < 32)
+    throw new InvalidOperationException("JwtSettings:SecretKey must be at least 32 bytes long.");
+
+var key = Encoding.UTF8.GetBytes(secret);
+
 builder.Services.AddAuthentication(x =>
 {
     x.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -33,26 +39,29 @@ builder.Services.AddAuthentication(x =>
 })
 .AddJwtBearer(x =>
 {
-    x.RequireHttpsMetadata = false;
+    x.RequireHttpsMetadata = false; // Set to true in production
     x.SaveToken = true;
     x.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(key),
-        ValidateIssuer = false,
-        ValidateAudience = false
+        ValidateIssuer = true,
+        ValidIssuer = builder.Configuration["JwtSettings:Issuer"] ?? "your-issuer",
+        ValidateAudience = true,
+        ValidAudience = builder.Configuration["JwtSettings:Audience"] ?? "your-audience",
+        ClockSkew = TimeSpan.FromMinutes(1) // optional, adjust as needed
     };
 });
 
-// Add CORS - THIS IS CORRECT
+// ==================== CORS ====================
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll",
-        builder =>
+        policy =>
         {
-            builder.AllowAnyOrigin()
-                   .AllowAnyMethod()
-                   .AllowAnyHeader();
+            policy.AllowAnyOrigin()
+                  .AllowAnyMethod()
+                  .AllowAnyHeader();
         });
 });
 
@@ -60,12 +69,12 @@ builder.Services.AddCors(options =>
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IOTPService, OTPService>();
 
-// Add Health Checks
+// Health Checks
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Configure pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -73,18 +82,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseCors("AllowAll");  // 
+app.UseCors("AllowAll");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
-app.Use(async (context, next) =>
-{
-    context.Request.EnableBuffering();
-    using var reader = new StreamReader(context.Request.Body, leaveOpen: true);
-    var body = await reader.ReadToEndAsync();
-    Console.WriteLine($"Incoming request body: {body}");
-    context.Request.Body.Position = 0;
-    await next();
-});
+
 app.Run();

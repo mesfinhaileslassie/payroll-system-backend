@@ -1,9 +1,13 @@
 // Controllers/AuthController.cs
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
 using PayrollSystem.API.Models;
+using PayrollSystem.API.Services;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 
@@ -15,11 +19,19 @@ public class AuthController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly ILogger<AuthController> _logger;
+    private readonly IDeviceService _deviceService;
+    private readonly IConfiguration _configuration;
 
-    public AuthController(AppDbContext context, ILogger<AuthController> logger)
+    public AuthController(
+        AppDbContext context,
+        ILogger<AuthController> logger,
+        IDeviceService deviceService,
+        IConfiguration configuration)
     {
         _context = context;
         _logger = logger;
+        _deviceService = deviceService;
+        _configuration = configuration;
     }
 
     [HttpPost("login")]
@@ -32,13 +44,15 @@ public class AuthController : ControllerBase
             if (user == null)
                 return Unauthorized(new { success = false, message = "Invalid username or password" });
 
+            // In production, use BCrypt to verify password
             if (user.PasswordHash != request.Password)
                 return Unauthorized(new { success = false, message = "Invalid username or password" });
 
             if (!user.IsActive)
                 return Unauthorized(new { success = false, message = "Account is inactive" });
 
-            var token = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
+            // ✅ Generate JWT token
+            var token = GenerateJwtToken(user);
 
             user.LastLoginAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
@@ -68,172 +82,149 @@ public class AuthController : ControllerBase
     {
         try
         {
-            // 1. Check username and email
-            if (await _context.Users.AnyAsync(u => u.Username == request.Username))
-                return BadRequest(new { success = false, message = "Username already exists" });
-
-            if (await _context.Users.AnyAsync(u => u.Email == request.Email))
-                return BadRequest(new { success = false, message = "Email already exists" });
-
-            // 2. Validate and check device duplication BEFORE creating user
-            if (!string.IsNullOrEmpty(request.DeviceCode))
+            // 1. Validate input
+            if (string.IsNullOrWhiteSpace(request.Username) ||
+                string.IsNullOrWhiteSpace(request.Email) ||
+                string.IsNullOrWhiteSpace(request.Password))
             {
-                var deviceCodeData = JsonSerializer.Deserialize<Dictionary<string, string>>(request.DeviceCode);
-                if (deviceCodeData == null)
-                    return BadRequest(new { success = false, message = "Invalid device code format" });
-
-                var androidId = deviceCodeData.GetValueOrDefault("android_id");
-                var installationId = deviceCodeData.GetValueOrDefault("installation_id");
-                var publicKey = deviceCodeData.GetValueOrDefault("public_key");
-
-                if (string.IsNullOrEmpty(androidId) || string.IsNullOrEmpty(installationId))
-                    return BadRequest(new { success = false, message = "Missing required device information" });
-
-                // Check duplicates
-                if (await _context.Devices.AnyAsync(d => d.AndroidId == androidId))
-                    return BadRequest(new { success = false, message = "This device (Android ID) is already registered." });
-
-                if (await _context.Devices.AnyAsync(d => d.InstallationId == installationId))
-                    return BadRequest(new { success = false, message = "This installation ID is already registered." });
-
-                if (await _context.Devices.AnyAsync(d => d.PublicKey == publicKey))
-                    return BadRequest(new { success = false, message = "Public key already exists." });
+                return BadRequest(new { success = false, message = "Username, email, and password are required." });
             }
+
+            // 2. Check if user exists
+            if (await _context.Users.AnyAsync(u => u.Username == request.Username))
+                return BadRequest(new { success = false, message = "Username already exists." });
+            if (await _context.Users.AnyAsync(u => u.Email == request.Email))
+                return BadRequest(new { success = false, message = "Email already exists." });
 
             // 3. Determine role
             string role = "Employee";
+            bool requiresDevice = false;
             if (request.Position == "Payroll Officer")
+            {
                 role = "PayrollOfficer";
+                requiresDevice = true;
+            }
             else if (request.Position == "Finance Manager")
+            {
                 role = "FinanceManager";
+                requiresDevice = true;
+            }
 
-            // 4. Create user
+            // 4. If role requires device, ensure device code is provided
+            if (requiresDevice && string.IsNullOrWhiteSpace(request.DeviceCode))
+            {
+                return BadRequest(new { success = false, message = "Device code is required for Payroll Officer and Finance Manager roles." });
+            }
+
+            // 5. Create user
             var user = new User
             {
                 Username = request.Username,
                 Email = request.Email,
-                PasswordHash = request.Password,
-                FirstName = request.FirstName,
-                LastName = request.LastName,
-                Phone = request.Phone,
-                Gender = request.Gender,
+                PasswordHash = request.Password, // In production, hash this
+                FirstName = request.FirstName ?? "",
+                LastName = request.LastName ?? "",
+                Phone = request.Phone ?? "",
+                Gender = request.Gender ?? "",
                 Position = request.Position,
                 Role = role,
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
-
             _context.Users.Add(user);
             await _context.SaveChangesAsync();
 
-            // 5. Register device (if provided)
-            if (!string.IsNullOrEmpty(request.DeviceCode))
+            // 6. Register device (only if required)
+            if (requiresDevice)
             {
                 try
                 {
-                    var deviceCodeData = JsonSerializer.Deserialize<Dictionary<string, string>>(request.DeviceCode);
-                    if (deviceCodeData != null)
+                    var deviceResult = await _deviceService.RegisterDeviceAsync(
+                        new DeviceRegistrationRequest
+                        {
+                            DeviceCode = request.DeviceCode,
+                            DeviceName = request.DeviceName,
+                            EmployeeUsername = request.Username
+                        }
+                    );
+
+                    if (!deviceResult.Success)
                     {
-                        var androidId = deviceCodeData.GetValueOrDefault("android_id");
-                        var installationId = deviceCodeData.GetValueOrDefault("installation_id");
-                        var publicKey = deviceCodeData.GetValueOrDefault("public_key");
-                        var deviceModel = deviceCodeData.GetValueOrDefault("device_model");
-                        var brand = deviceCodeData.GetValueOrDefault("brand");
-                        var manufacturer = deviceCodeData.GetValueOrDefault("manufacturer");
-                        var serialNumber = deviceCodeData.GetValueOrDefault("serial_number");
-
-                        var device = new Device
-                        {
-                            UserId = user.Id,
-                            AndroidId = androidId,
-                            DeviceModel = deviceModel,
-                            SerialNumber = serialNumber,
-                            InstallationId = installationId,
-                            PublicKey = publicKey,
-                            Brand = brand,
-                            Manufacturer = manufacturer,
-                            DeviceName = request.DeviceName ?? deviceModel,
-                            Status = "PENDING",
-                            CreatedAt = DateTime.UtcNow
-                        };
-
-                        _context.Devices.Add(device);
+                        // Rollback user creation
+                        _context.Users.Remove(user);
                         await _context.SaveChangesAsync();
-
-                        var activationCode = GenerateActivationCode();
-                        device.ActivationCode = activationCode;
-                        device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
-                        await _context.SaveChangesAsync();
-
-                        var deviceToken = Guid.NewGuid().ToString();
-                        device.DeviceToken = deviceToken;
-                        await _context.SaveChangesAsync();
-
-                        return Ok(new
-                        {
-                            success = true,
-                            message = "Employee registered with device. Please activate the device using the activation code.",
-                            userId = user.Id,
-                            deviceId = device.Id,
-                            activationCode = activationCode
-                        });
+                        return BadRequest(new { success = false, message = deviceResult.Message });
                     }
+
+                    // Return success with activation code
+                    return Ok(new
+                    {
+                        success = true,
+                        message = "Employee registered with device.",
+                        userId = user.Id,
+                        deviceId = deviceResult.DeviceId,
+                        activationCode = deviceResult.ActivationCode
+                    });
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error registering device during employee creation");
+                    // Rollback user creation
                     _context.Users.Remove(user);
                     await _context.SaveChangesAsync();
-                    return StatusCode(500, new { success = false, message = "Failed to register device. Please try again." });
+                    _logger.LogError(ex, "Device registration failed for user {Username}", request.Username);
+                    return StatusCode(500, new { success = false, message = $"Device registration failed: {ex.Message}" });
                 }
             }
 
+            // No device registration – return success without activation code
             return Ok(new
             {
                 success = true,
-                message = "Employee registered successfully (no device registered)",
+                message = "Employee registered successfully (no device required).",
                 userId = user.Id
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error registering employee");
-            return StatusCode(500, new { success = false, message = $"Server error: {ex.Message}" });
+            _logger.LogError(ex, "Employee registration failed");
+            return StatusCode(500, new { success = false, message = $"Registration failed: {ex.Message}" });
         }
     }
 
-    // ==================== CHANGE PASSWORD ====================
+    // ==================== JWT TOKEN GENERATION ====================
 
-    [HttpPost("change-password")]
-    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    private string GenerateJwtToken(User user)
     {
-        try
+        var secretKey = _configuration["JwtSettings:SecretKey"]
+            ?? throw new InvalidOperationException("JwtSettings:SecretKey is not configured.");
+        var key = Encoding.UTF8.GetBytes(secretKey);
+        var signingKey = new SymmetricSecurityKey(key);
+
+        var claims = new[]
         {
-            var user = await _context.Users.FindAsync(request.UserId);
-            if (user == null)
-                return NotFound(new { success = false, message = "User not found" });
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new Claim(ClaimTypes.Name, user.Username),
+            new Claim(ClaimTypes.Role, user.Role ?? "Employee"),
+            new Claim("UserId", user.Id.ToString())
+        };
 
-            // Verify current password (plaintext for demo)
-            if (user.PasswordHash != request.CurrentPassword)
-                return BadRequest(new { success = false, message = "Current password is incorrect" });
+        var token = new JwtSecurityToken(
+            issuer: _configuration["JwtSettings:Issuer"] ?? "your-issuer",
+            audience: _configuration["JwtSettings:Audience"] ?? "your-audience",
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256)
+        );
 
-            // Update password
-            user.PasswordHash = request.NewPassword;
-            user.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
-
-            return Ok(new { success = true, message = "Password updated successfully" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error changing password");
-            return StatusCode(500, new { success = false, message = "Internal server error" });
-        }
+        return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
     private string GenerateActivationCode()
     {
-        var random = new Random();
-        return random.Next(100000, 999999).ToString();
+        using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+        var bytes = new byte[4];
+        rng.GetBytes(bytes);
+        var value = BitConverter.ToUInt32(bytes, 0) % 900000 + 100000;
+        return value.ToString("D6");
     }
 }

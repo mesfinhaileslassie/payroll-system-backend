@@ -1,15 +1,17 @@
 // Controllers/DeviceController.cs
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
 using PayrollSystem.API.Services;
-
+using System.Security.Cryptography;
 namespace PayrollSystem.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize] // Enforces JWT authentication on all actions
 public class DeviceController : ControllerBase
 {
     private readonly IDeviceService _deviceService;
@@ -22,11 +24,12 @@ public class DeviceController : ControllerBase
         _deviceService = deviceService;
         _logger = logger;
         _context = context;
-        _cache = cache; // ✅ parameter name is 'cache', field is '_cache'
+        _cache = cache;
     }
 
-    // ==================== REGISTRATION ====================
+    // ==================== PUBLIC ENDPOINTS (AllowAnonymous) ====================
 
+    [AllowAnonymous]
     [HttpPost("register")]
     public async Task<IActionResult> RegisterDevice([FromBody] DeviceRegistrationRequest request)
     {
@@ -38,10 +41,7 @@ public class DeviceController : ControllerBase
                 return BadRequest(new { success = false, message = "Employee username is required" });
 
             var result = await _deviceService.RegisterDeviceAsync(request);
-            if (result.Success)
-                return Ok(result);
-            else
-                return BadRequest(result);
+            return result.Success ? Ok(result) : BadRequest(result);
         }
         catch (Exception ex)
         {
@@ -50,120 +50,7 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== GET DEVICE ====================
-
-    [HttpGet("{id}")]
-    public async Task<IActionResult> GetDevice(int id)
-    {
-        try
-        {
-            var device = await _deviceService.GetDeviceByIdAsync(id);
-            if (device == null)
-                return NotFound(new { success = false, message = "Device not found" });
-
-            return Ok(new
-            {
-                success = true,
-                data = new
-                {
-                    id = device.Id,
-                    androidId = device.AndroidId,
-                    deviceModel = device.DeviceModel,
-                    deviceName = device.DeviceName,
-                    status = device.Status,
-                    secretKey = device.SecretKey,
-                    deviceToken = device.DeviceToken,
-                    installationId = device.InstallationId,
-                    brand = device.Brand,
-                    manufacturer = device.Manufacturer,
-                    publicKey = device.PublicKey,
-                    userId = device.UserId
-                }
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting device");
-            return StatusCode(500, new { success = false, message = "Internal server error" });
-        }
-    }
-
-    // ==================== GET ALL DEVICES ====================
-
-    [HttpGet("all")]
-    public async Task<IActionResult> GetAllDevices()
-    {
-        try
-        {
-            var devices = await _context.Devices
-                .OrderByDescending(d => d.CreatedAt)
-                .Select(d => new
-                {
-                    d.Id,
-                    d.DeviceName,
-                    d.DeviceModel,
-                    d.Status,
-                    d.UserId,
-                    d.InstallationId,
-                    d.CreatedAt,
-                    d.AndroidId
-                })
-                .ToListAsync();
-
-            return Ok(new { success = true, data = devices });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting all devices");
-            return StatusCode(500, new { success = false, message = "Internal server error" });
-        }
-    }
-
-    // ==================== CHECK DEVICE REGISTRATION ====================
-
-    [HttpGet("check-registration")]
-    public async Task<IActionResult> CheckDeviceRegistration([FromQuery] string installationId)
-    {
-        if (string.IsNullOrEmpty(installationId))
-            return BadRequest(new { success = false, message = "Installation ID is required" });
-
-        var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
-        if (device == null)
-            return Ok(new { registered = false, status = (string?)null, deviceId = (int?)null });
-
-        return Ok(new { registered = true, status = device.Status, deviceId = device.Id });
-    }
-
-    // ==================== GET DEVICE BY INSTALLATION ID ====================
-
-    [HttpGet("by-installation/{installationId}")]
-    public async Task<IActionResult> GetDeviceByInstallationId(string installationId)
-    {
-        if (string.IsNullOrEmpty(installationId))
-            return BadRequest(new { success = false, message = "Installation ID is required" });
-
-        var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
-        if (device == null)
-            return NotFound(new { success = false, message = "Device not found" });
-
-        return Ok(new
-        {
-            success = true,
-            data = new
-            {
-                device.Id,
-                device.AndroidId,
-                device.DeviceModel,
-                device.DeviceName,
-                device.Status,
-                device.InstallationId,
-                device.UserId
-            }
-        });
-    }
-
-    // ==================== ACTIVATION CODE LOOKUP ====================
-
+    [AllowAnonymous]
     [HttpGet("get-device-id/{activationCode}")]
     public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCode)
     {
@@ -191,8 +78,7 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== ACTIVATE DEVICE ====================
-
+    [AllowAnonymous]
     [HttpPost("activate")]
     public async Task<IActionResult> ActivateDevice([FromBody] ActivationRequest request)
     {
@@ -224,8 +110,7 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== GET CHALLENGE ====================
-
+    [AllowAnonymous]
     [HttpGet("{id}/challenge")]
     public async Task<IActionResult> GetChallenge(int id)
     {
@@ -252,8 +137,7 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== VERIFY SIGNATURE ====================
-
+    [AllowAnonymous]
     [HttpPost("verify-signature")]
     public async Task<IActionResult> VerifySignature([FromBody] SignatureVerificationRequest request)
     {
@@ -304,7 +188,119 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== UPDATE DEVICE ====================
+    [AllowAnonymous]
+    [HttpGet("check-registration")]
+    public async Task<IActionResult> CheckDeviceRegistration([FromQuery] string installationId)
+    {
+        if (string.IsNullOrEmpty(installationId))
+            return BadRequest(new { success = false, message = "Installation ID is required" });
+
+        var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
+        if (device == null)
+            return Ok(new { registered = false, status = (string?)null, deviceId = (int?)null });
+
+        return Ok(new { registered = true, status = device.Status, deviceId = device.Id });
+    }
+
+    [AllowAnonymous]
+    [HttpGet("test")]
+    public IActionResult Test()
+    {
+        return Ok(new { message = "API is working!", timestamp = DateTime.Now, status = "online" });
+    }
+
+    // ==================== PROTECTED ENDPOINTS (require auth) ====================
+
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetDevice(int id)
+    {
+        try
+        {
+            var device = await _deviceService.GetDeviceByIdAsync(id);
+            if (device == null)
+                return NotFound(new { success = false, message = "Device not found" });
+
+            // ⚠️ DO NOT return secretKey – it must never leave the server.
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    id = device.Id,
+                    androidId = device.AndroidId,
+                    deviceModel = device.DeviceModel,
+                    deviceName = device.DeviceName,
+                    status = device.Status,
+                    deviceToken = device.DeviceToken,
+                    installationId = device.InstallationId,
+                    brand = device.Brand,
+                    manufacturer = device.Manufacturer,
+                    publicKey = device.PublicKey,
+                    userId = device.UserId
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting device");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    [HttpGet("all")]
+    public async Task<IActionResult> GetAllDevices()
+    {
+        try
+        {
+            var devices = await _context.Devices
+                .OrderByDescending(d => d.CreatedAt)
+                .Select(d => new
+                {
+                    d.Id,
+                    d.DeviceName,
+                    d.DeviceModel,
+                    d.Status,
+                    d.UserId,
+                    d.InstallationId,
+                    d.CreatedAt,
+                    d.AndroidId
+                })
+                .ToListAsync();
+
+            return Ok(new { success = true, data = devices });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting all devices");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    [HttpGet("by-installation/{installationId}")]
+    public async Task<IActionResult> GetDeviceByInstallationId(string installationId)
+    {
+        if (string.IsNullOrEmpty(installationId))
+            return BadRequest(new { success = false, message = "Installation ID is required" });
+
+        var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
+        if (device == null)
+            return NotFound(new { success = false, message = "Device not found" });
+
+        return Ok(new
+        {
+            success = true,
+            data = new
+            {
+                device.Id,
+                device.AndroidId,
+                device.DeviceModel,
+                device.DeviceName,
+                device.Status,
+                device.InstallationId,
+                device.UserId
+            }
+        });
+    }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateDevice(int id, [FromBody] UpdateDeviceRequest request)
@@ -320,9 +316,7 @@ public class DeviceController : ControllerBase
 
             device.DeviceName = request.DeviceName;
             if (!string.IsNullOrEmpty(request.Status) && (request.Status == "ACTIVE" || request.Status == "INACTIVE" || request.Status == "PENDING"))
-            {
                 device.Status = request.Status;
-            }
 
             device.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
@@ -335,8 +329,6 @@ public class DeviceController : ControllerBase
             return StatusCode(500, new { success = false, message = "Internal server error" });
         }
     }
-
-    // ==================== DELETE DEVICE ====================
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteDevice(int id)
@@ -356,8 +348,6 @@ public class DeviceController : ControllerBase
         }
     }
 
-    // ==================== STORE OTP COUNTER (NEW) ====================
-
     [HttpPost("store-counter")]
     public IActionResult StoreCounter([FromBody] StoreCounterRequest request)
     {
@@ -370,31 +360,29 @@ public class DeviceController : ControllerBase
         return Ok(new { success = true, message = "Counter stored successfully" });
     }
 
-    // ==================== TEST ====================
-
-    [HttpGet("test")]
-    public IActionResult Test()
-    {
-        return Ok(new { message = "API is working!", timestamp = DateTime.Now, status = "online" });
-    }
-
     // ==================== HELPERS ====================
 
     private string GenerateChallenge()
     {
-        var random = new Random();
+        using var rng = RandomNumberGenerator.Create();
         var bytes = new byte[32];
-        random.NextBytes(bytes);
+        rng.GetBytes(bytes);
         return Convert.ToBase64String(bytes);
     }
 
     private string GenerateDeviceToken()
     {
-        return Guid.NewGuid().ToString().Replace("-", "").Substring(0, 32);
+        using var rng = RandomNumberGenerator.Create();
+        var bytes = new byte[16];
+        rng.GetBytes(bytes);
+        return BitConverter.ToString(bytes).Replace("-", "").Substring(0, 32);
     }
 
     private string GenerateSecretKey()
     {
-        return Guid.NewGuid().ToString().Replace("-", "").Substring(0, 32);
+        using var rng = RandomNumberGenerator.Create();
+        var bytes = new byte[16];
+        rng.GetBytes(bytes);
+        return BitConverter.ToString(bytes).Replace("-", "").Substring(0, 32);
     }
 }

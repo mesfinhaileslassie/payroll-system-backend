@@ -19,14 +19,15 @@ public class UsersController : ControllerBase
         _logger = logger;
     }
 
-    // ✅ SPECIFIC ROUTE FIRST: GET api/users/employees
+    // ✅ Get all employees (role = 'Employee')
     [HttpGet("employees")]
     public async Task<IActionResult> GetEmployees()
     {
         try
         {
+            // Case-insensitive comparison for safety
             var employees = await _context.Users
-                .Where(u => u.Role == "Employee")
+                .Where(u => u.Role.ToLower() == "employee")
                 .Select(u => new
                 {
                     u.Id,
@@ -39,6 +40,7 @@ public class UsersController : ControllerBase
                 })
                 .ToListAsync();
 
+            _logger.LogInformation($"Returning {employees.Count} employees");
             return Ok(new { success = true, data = employees });
         }
         catch (Exception ex)
@@ -48,7 +50,7 @@ public class UsersController : ControllerBase
         }
     }
 
-    // ✅ GENERIC ROUTE SECOND: GET api/users/{id}
+    // ✅ Get user by ID
     [HttpGet("{id}")]
     public async Task<IActionResult> GetUser(int id)
     {
