@@ -1,4 +1,5 @@
 // Controllers/UsersController.cs
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PayrollSystem.API.Data;
@@ -8,6 +9,7 @@ namespace PayrollSystem.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize(Roles = "Admin")] // Only Admin can access
 public class UsersController : ControllerBase
 {
     private readonly AppDbContext _context;
@@ -19,15 +21,50 @@ public class UsersController : ControllerBase
         _logger = logger;
     }
 
-    // ✅ Get all employees (role = 'Employee')
+    // ==================== GET ALL USERS ====================
+
+    [HttpGet("all")]
+    public async Task<IActionResult> GetAllUsers()
+    {
+        try
+        {
+            var users = await _context.Users
+                .Select(u => new
+                {
+                    u.Id,
+                    u.Username,
+                    u.Email,
+                    u.FirstName,
+                    u.LastName,
+                    u.Phone,
+                    u.Gender,
+                    u.Position,
+                    u.Role,
+                    u.IsActive,
+                    u.CreatedAt
+                })
+                .OrderByDescending(u => u.CreatedAt)
+                .ToListAsync();
+
+            return Ok(new { success = true, data = users });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting users");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    // ==================== GET EMPLOYEES (for Finance Manager) ====================
+
+    [AllowAnonymous]
     [HttpGet("employees")]
     public async Task<IActionResult> GetEmployees()
     {
         try
         {
-            // Case-insensitive comparison for safety
             var employees = await _context.Users
-                .Where(u => u.Role.ToLower() == "employee")
+                .Where(u => u.Role == "Employee")
                 .Select(u => new
                 {
                     u.Id,
@@ -40,7 +77,6 @@ public class UsersController : ControllerBase
                 })
                 .ToListAsync();
 
-            _logger.LogInformation($"Returning {employees.Count} employees");
             return Ok(new { success = true, data = employees });
         }
         catch (Exception ex)
@@ -50,7 +86,8 @@ public class UsersController : ControllerBase
         }
     }
 
-    // ✅ Get user by ID
+    // ==================== GET USER BY ID ====================
+
     [HttpGet("{id}")]
     public async Task<IActionResult> GetUser(int id)
     {
@@ -58,20 +95,19 @@ public class UsersController : ControllerBase
         {
             var user = await _context.Users
                 .Where(u => u.Id == id)
-                .Select(u => new UserDto
+                .Select(u => new
                 {
-                    Id = u.Id,
-                    Username = u.Username,
-                    Email = u.Email,
-                    FirstName = u.FirstName,
-                    LastName = u.LastName,
-                    Phone = u.Phone,
-                    Gender = u.Gender,
-                    Department = u.Department,
-                    Position = u.Position,
-                    EmployeeId = u.EmployeeId,
-                    IsActive = u.IsActive,
-                    Role = u.Role
+                    u.Id,
+                    u.Username,
+                    u.Email,
+                    u.FirstName,
+                    u.LastName,
+                    u.Phone,
+                    u.Gender,
+                    u.Position,
+                    u.Role,
+                    u.IsActive,
+                    u.CreatedAt
                 })
                 .FirstOrDefaultAsync();
 
@@ -83,6 +119,81 @@ public class UsersController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting user");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    // ==================== UPDATE USER ====================
+
+    [HttpPut("{id}")]
+    public async Task<IActionResult> UpdateUser(int id, [FromBody] UpdateUserRequest request)
+    {
+        try
+        {
+            var user = await _context.Users.FindAsync(id);
+            if (user == null)
+                return NotFound(new { success = false, message = "User not found" });
+
+            // Update only provided fields
+            if (!string.IsNullOrEmpty(request.FirstName))
+                user.FirstName = request.FirstName;
+            if (!string.IsNullOrEmpty(request.LastName))
+                user.LastName = request.LastName;
+            if (!string.IsNullOrEmpty(request.Email))
+                user.Email = request.Email;
+            if (!string.IsNullOrEmpty(request.Phone))
+                user.Phone = request.Phone;
+            if (!string.IsNullOrEmpty(request.Gender))
+                user.Gender = request.Gender;
+            if (!string.IsNullOrEmpty(request.Position))
+                user.Position = request.Position;
+            if (request.IsActive.HasValue)
+                user.IsActive = request.IsActive.Value;
+
+            user.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { success = true, message = "User updated successfully" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating user");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    // ==================== DELETE USER ====================
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeleteUser(int id)
+    {
+        try
+        {
+            var user = await _context.Users
+                .Include(u => u.Devices)
+                .Include(u => u.BudgetApprovals)
+                .FirstOrDefaultAsync(u => u.Id == id);
+
+            if (user == null)
+                return NotFound(new { success = false, message = "User not found" });
+
+            // Check if user is Admin – prevent deletion of last admin
+            if (user.Role == "Admin")
+            {
+                var adminCount = await _context.Users.CountAsync(u => u.Role == "Admin");
+                if (adminCount <= 1)
+                    return BadRequest(new { success = false, message = "Cannot delete the last admin user." });
+            }
+
+            // Remove associated data (devices, budgets, etc.) will be cascade deleted
+            _context.Users.Remove(user);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { success = true, message = "User deleted successfully" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting user");
             return StatusCode(500, new { success = false, message = "Internal server error" });
         }
     }
