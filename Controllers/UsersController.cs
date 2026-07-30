@@ -4,12 +4,13 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
+using System.Security.Claims;
 
 namespace PayrollSystem.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "Admin")] // Only Admin can access
+[Authorize] // Allow any authenticated user to access the controller
 public class UsersController : ControllerBase
 {
     private readonly AppDbContext _context;
@@ -21,8 +22,9 @@ public class UsersController : ControllerBase
         _logger = logger;
     }
 
-    // ==================== GET ALL USERS ====================
+    // ==================== GET ALL USERS (Admin only) ====================
 
+    [Authorize(Roles = "Admin")]
     [HttpGet("all")]
     public async Task<IActionResult> GetAllUsers()
     {
@@ -55,7 +57,7 @@ public class UsersController : ControllerBase
         }
     }
 
-    // ==================== GET EMPLOYEES (for Finance Manager) ====================
+    // ==================== GET EMPLOYEES (Finance Manager) ====================
 
     [AllowAnonymous]
     [HttpGet("employees")]
@@ -86,13 +88,23 @@ public class UsersController : ControllerBase
         }
     }
 
-    // ==================== GET USER BY ID ====================
+    // ==================== GET USER BY ID (self or Admin) ====================
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetUser(int id)
     {
         try
         {
+            // Get the currently authenticated user ID from the token
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+            // Allow access if the user is fetching their own profile or if they are an Admin
+            if (userIdClaim == null || (int.Parse(userIdClaim) != id && userRole != "Admin"))
+            {
+                return Forbid(); // 403 Forbidden
+            }
+
             var user = await _context.Users
                 .Where(u => u.Id == id)
                 .Select(u => new
@@ -123,8 +135,9 @@ public class UsersController : ControllerBase
         }
     }
 
-    // ==================== UPDATE USER ====================
+    // ==================== UPDATE USER (Admin only) ====================
 
+    [Authorize(Roles = "Admin")]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateUser(int id, [FromBody] UpdateUserRequest request)
     {
@@ -134,7 +147,6 @@ public class UsersController : ControllerBase
             if (user == null)
                 return NotFound(new { success = false, message = "User not found" });
 
-            // Update only provided fields
             if (!string.IsNullOrEmpty(request.FirstName))
                 user.FirstName = request.FirstName;
             if (!string.IsNullOrEmpty(request.LastName))
@@ -162,8 +174,9 @@ public class UsersController : ControllerBase
         }
     }
 
-    // ==================== DELETE USER ====================
+    // ==================== DELETE USER (Admin only) ====================
 
+    [Authorize(Roles = "Admin")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteUser(int id)
     {
@@ -177,7 +190,6 @@ public class UsersController : ControllerBase
             if (user == null)
                 return NotFound(new { success = false, message = "User not found" });
 
-            // Check if user is Admin – prevent deletion of last admin
             if (user.Role == "Admin")
             {
                 var adminCount = await _context.Users.CountAsync(u => u.Role == "Admin");
@@ -185,7 +197,6 @@ public class UsersController : ControllerBase
                     return BadRequest(new { success = false, message = "Cannot delete the last admin user." });
             }
 
-            // Remove associated data (devices, budgets, etc.) will be cascade deleted
             _context.Users.Remove(user);
             await _context.SaveChangesAsync();
 

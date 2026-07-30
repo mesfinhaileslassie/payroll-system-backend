@@ -360,6 +360,40 @@ public class DeviceController : ControllerBase
         return Ok(new { success = true, message = "Counter stored successfully" });
     }
 
+    // ==================== REGENERATE ACTIVATION CODE ====================
+
+    [HttpPost("{id}/regenerate-activation")]
+    public async Task<IActionResult> RegenerateActivationCode(int id)
+    {
+        try
+        {
+            var device = await _deviceService.GetDeviceByIdAsync(id);
+            if (device == null)
+                return NotFound(new { success = false, message = "Device not found" });
+
+            if (device.Status != "PENDING")
+                return BadRequest(new { success = false, message = "Activation code can only be regenerated for devices in PENDING status." });
+
+            var newActivationCode = GenerateActivationCode();
+            device.ActivationCode = newActivationCode;
+            device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
+            device.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Activation code regenerated successfully.",
+                activationCode = newActivationCode
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error regenerating activation code for device {DeviceId}", id);
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
     // ==================== HELPERS ====================
 
     private string GenerateChallenge()
@@ -384,5 +418,14 @@ public class DeviceController : ControllerBase
         var bytes = new byte[16];
         rng.GetBytes(bytes);
         return BitConverter.ToString(bytes).Replace("-", "").Substring(0, 32);
+    }
+
+    private string GenerateActivationCode()
+    {
+        using var rng = RandomNumberGenerator.Create();
+        var bytes = new byte[4];
+        rng.GetBytes(bytes);
+        var value = BitConverter.ToUInt32(bytes, 0) % 900000 + 100000;
+        return value.ToString("D6");
     }
 }
