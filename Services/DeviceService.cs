@@ -35,7 +35,6 @@ public class DeviceService : IDeviceService
 
             var androidId = deviceCodeData.GetValueOrDefault("android_id");
             var deviceModel = deviceCodeData.GetValueOrDefault("device_model");
-            var serialNumber = deviceCodeData.GetValueOrDefault("serial_number");
             var installationId = deviceCodeData.GetValueOrDefault("installation_id");
             var publicKey = deviceCodeData.GetValueOrDefault("public_key");
             var brand = deviceCodeData.GetValueOrDefault("brand");
@@ -82,7 +81,6 @@ public class DeviceService : IDeviceService
                 UserId = employee.Id,
                 AndroidId = androidId,
                 DeviceModel = deviceModel,
-                SerialNumber = serialNumber,
                 InstallationId = installationId,
                 PublicKey = publicKey,
                 Brand = brand,

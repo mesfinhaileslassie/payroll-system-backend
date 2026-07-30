@@ -1,4 +1,5 @@
 // Controllers/DeviceController.cs
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -6,12 +7,12 @@ using Microsoft.Extensions.Caching.Memory;
 using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
 using PayrollSystem.API.Services;
-using System.Security.Cryptography;
+
 namespace PayrollSystem.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize] // Enforces JWT authentication on all actions
+[Authorize]
 public class DeviceController : ControllerBase
 {
     private readonly IDeviceService _deviceService;
@@ -220,7 +221,6 @@ public class DeviceController : ControllerBase
             if (device == null)
                 return NotFound(new { success = false, message = "Device not found" });
 
-            // ⚠️ DO NOT return secretKey – it must never leave the server.
             return Ok(new
             {
                 success = true,

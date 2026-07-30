@@ -18,8 +18,7 @@ public class Device
     [MaxLength(100)]
     public string? DeviceModel { get; set; }
 
-    [MaxLength(100)]
-    public string? SerialNumber { get; set; }
+    // [MaxLength(100)] public string? SerialNumber { get; set; }  // ❌ REMOVED
 
     [Required]
     [MaxLength(36)]
@@ -43,7 +42,6 @@ public class Device
     [MaxLength(255)]
     public string? SecretKey { get; set; }
 
-    // Status values: PENDING, ACTIVE, INACTIVE
     [MaxLength(20)]
     public string Status { get; set; } = "PENDING";
 
