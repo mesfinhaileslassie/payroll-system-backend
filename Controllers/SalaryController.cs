@@ -1,4 +1,5 @@
 // Controllers/SalaryController.cs
+
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +39,7 @@ public class SalaryController : ControllerBase
             // 1. Validate request
             if (request.EmployeeId <= 0 || request.Amount <= 0 || string.IsNullOrEmpty(request.Username))
                 return BadRequest(new { success = false, message = "Invalid request" });
+
             if (string.IsNullOrEmpty(request.PaymentMonth) || !Regex.IsMatch(request.PaymentMonth, @"^\d{4}-\d{2}$"))
                 return BadRequest(new { success = false, message = "Invalid payment month format (YYYY-MM)" });
 
@@ -46,12 +48,14 @@ public class SalaryController : ControllerBase
                 .FirstOrDefaultAsync(sp => sp.EmployeeId == request.EmployeeId
                     && sp.PaymentMonth == request.PaymentMonth
                     && sp.Status == "APPROVED");
+
             if (existing != null)
                 return BadRequest(new { success = false, message = $"Salary for {request.PaymentMonth} has already been paid to this employee." });
 
             // 3. Find Finance Manager
             var financeManager = await _context.Users
                 .FirstOrDefaultAsync(u => u.Username == request.Username);
+
             if (financeManager == null)
                 return BadRequest(new { success = false, message = "User not found" });
 
@@ -59,10 +63,11 @@ public class SalaryController : ControllerBase
             var devices = await _context.Devices
                 .Where(d => d.UserId == financeManager.Id && d.Status == "ACTIVE")
                 .ToListAsync();
+
             if (devices.Count == 0)
                 return BadRequest(new { success = false, message = "No active device found for this user" });
 
-            // 5. OTP validation with cache fallback & replay protection
+            // 5. OTP validation — STRICTLY ONLINE (counter-based only)
             bool otpValid = false;
             long matchedCounter = 0;
             string matchedInstallationId = "";
@@ -75,77 +80,47 @@ public class SalaryController : ControllerBase
                     continue;
                 }
 
-                // Try cached counter first
+                // Retrieve the cached counter that the app pushed
                 var cacheKey = $"otp_counter_{device.InstallationId}";
                 var cachedCounter = _cache.Get<long?>(cacheKey);
 
-                string? generatedOtp = null;
-                long counterUsed = 0;
-                bool matched = false;
-
-                if (cachedCounter.HasValue)
+                if (!cachedCounter.HasValue)
                 {
-                    counterUsed = cachedCounter.Value;
-                    generatedOtp = GenerateOTPFromCounter(device.SecretKey, counterUsed);
-                    if (generatedOtp == request.Otp)
-                    {
-                        matched = true;
-                        _logger.LogInformation($"✅ Using cached counter {counterUsed} for device {device.Id}");
-                    }
+                    _logger.LogWarning($"No cached counter found for device {device.Id} (InstallationId: {device.InstallationId})");
+                    continue; // No counter available — skip this device (no fallback)
                 }
 
-                // If cached counter didn't match, fallback to time-based (check -1, 0, +1)
-                if (!matched)
+                long counterUsed = cachedCounter.Value;
+                string generatedOtp = GenerateOTPFromCounter(device.SecretKey, counterUsed);
+
+                if (generatedOtp == request.Otp)
                 {
-                    var (current, currCounter) = GenerateTOTP(device.SecretKey, 0);
-                    var (prev, prevCounter) = GenerateTOTP(device.SecretKey, -1);
-                    var (next, nextCounter) = GenerateTOTP(device.SecretKey, 1);
-                    _logger.LogInformation($"⚠️ Time-based fallback: current={current}, prev={prev}, next={next}");
+                    // ✅ Valid OTP found using the counter
+                    otpValid = true;
+                    matchedCounter = counterUsed;
+                    matchedInstallationId = device.InstallationId;
 
-                    if (current == request.Otp)
-                    {
-                        matched = true;
-                        counterUsed = currCounter;
-                        generatedOtp = current;
-                    }
-                    else if (prev == request.Otp)
-                    {
-                        matched = true;
-                        counterUsed = prevCounter;
-                        generatedOtp = prev;
-                    }
-                    else if (next == request.Otp)
-                    {
-                        matched = true;
-                        counterUsed = nextCounter;
-                        generatedOtp = next;
-                    }
+                    _logger.LogInformation($"✅ OTP validated using counter {counterUsed} for device {device.Id}");
+                    break;
                 }
-
-                if (!matched)
-                    continue; // try next device
-
-                // Only now check replay protection
-                var usedKey = $"otp_used_{device.InstallationId}_{counterUsed}";
-                if (_cache.TryGetValue(usedKey, out _))
+                else
                 {
-                    _logger.LogWarning($"OTP reuse attempt for device {device.Id}, counter {counterUsed}");
-                    return BadRequest(new { success = false, message = "OTP is already used. Please generate a new token." });
+                    _logger.LogWarning($"❌ OTP mismatch for device {device.Id}: expected {generatedOtp}, got {request.Otp}");
                 }
-
-                // Valid OTP found
-                otpValid = true;
-                matchedCounter = counterUsed;
-                matchedInstallationId = device.InstallationId;
-                break;
             }
 
+            // If no device matched, reject
             if (!otpValid)
-                return BadRequest(new { success = false, message = "Invalid OTP. Please generate a new token." });
+                return BadRequest(new { success = false, message = "Invalid OTP. Please generate a new token using the Soft Token app while online." });
 
-            // 6. Mark counter as used
-            var usedKeyFinal = $"otp_used_{matchedInstallationId}_{matchedCounter}";
-            _cache.Set(usedKeyFinal, true, TimeSpan.FromSeconds(60));
+            // 6. Replay protection: mark the counter as used
+            var usedKey = $"otp_used_{matchedInstallationId}_{matchedCounter}";
+            if (_cache.TryGetValue(usedKey, out _))
+            {
+                _logger.LogWarning($"OTP reuse attempt for installation {matchedInstallationId}, counter {matchedCounter}");
+                return BadRequest(new { success = false, message = "OTP is already used. Please generate a new token." });
+            }
+            _cache.Set(usedKey, true, TimeSpan.FromSeconds(60));
 
             // 7. Create payment record
             var salaryPayment = new SalaryPayment
@@ -157,6 +132,7 @@ public class SalaryController : ControllerBase
                 ApprovedAt = DateTime.UtcNow,
                 OTP = request.Otp
             };
+
             _context.SalaryPayments.Add(salaryPayment);
             await _context.SaveChangesAsync();
 
@@ -180,6 +156,7 @@ public class SalaryController : ControllerBase
                 .Where(sp => sp.EmployeeId == employeeId)
                 .OrderByDescending(sp => sp.CreatedAt)
                 .ToListAsync();
+
             return Ok(new { success = true, data = payments });
         }
         catch (Exception ex)
@@ -198,6 +175,7 @@ public class SalaryController : ControllerBase
                 .Include(sp => sp.Employee)
                 .OrderByDescending(sp => sp.CreatedAt)
                 .ToListAsync();
+
             return Ok(new { success = true, data = payments });
         }
         catch (Exception ex)
@@ -207,27 +185,7 @@ public class SalaryController : ControllerBase
         }
     }
 
-    // ==================== HELPERS ====================
-
-    private (string otp, long counter) GenerateTOTP(string secretKey, int offset = 0)
-    {
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var counter = (timestamp / 30) + offset;
-        var combined = $"{secretKey}:{counter}";
-        var combinedBytes = Encoding.UTF8.GetBytes(combined);
-        using var sha = SHA256.Create();
-        var hash = sha.ComputeHash(combinedBytes);
-        var hashString = BitConverter.ToString(hash).Replace("-", "").ToLower();
-        var tokenValue = "";
-        foreach (char c in hashString)
-        {
-            if (char.IsDigit(c) && tokenValue.Length < 6)
-                tokenValue += c;
-        }
-        while (tokenValue.Length < 6)
-            tokenValue = "0" + tokenValue;
-        return (tokenValue.Substring(0, 6), counter);
-    }
+    // ==================== HELPER (ONLINE COUNTER-BASED) ====================
 
     private string GenerateOTPFromCounter(string secretKey, long counter)
     {
@@ -236,6 +194,7 @@ public class SalaryController : ControllerBase
         using var sha = SHA256.Create();
         var hash = sha.ComputeHash(combinedBytes);
         var hashString = BitConverter.ToString(hash).Replace("-", "").ToLower();
+
         var tokenValue = "";
         foreach (char c in hashString)
         {
@@ -244,6 +203,7 @@ public class SalaryController : ControllerBase
         }
         while (tokenValue.Length < 6)
             tokenValue = "0" + tokenValue;
+
         return tokenValue.Substring(0, 6);
     }
 }

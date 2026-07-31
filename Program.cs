@@ -19,7 +19,7 @@ builder.Services.AddSwaggerGen(c =>
 // Database
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+    options.UseNpgsql(connectionString));  // ✅ Changed from UseMySql
 
 // Memory Cache
 builder.Services.AddMemoryCache();
@@ -49,7 +49,7 @@ builder.Services.AddAuthentication(x =>
         ValidIssuer = builder.Configuration["JwtSettings:Issuer"] ?? "your-issuer",
         ValidateAudience = true,
         ValidAudience = builder.Configuration["JwtSettings:Audience"] ?? "your-audience",
-        ClockSkew = TimeSpan.FromMinutes(1) // optional, adjust as needed
+        ClockSkew = TimeSpan.FromMinutes(1)
     };
 });
 

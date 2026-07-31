@@ -1,4 +1,5 @@
 // Data/AppDbContext.cs
+
 using Microsoft.EntityFrameworkCore;
 using PayrollSystem.API.Models;
 
@@ -11,9 +12,11 @@ public class AppDbContext : DbContext
     public DbSet<User> Users { get; set; }
     public DbSet<Device> Devices { get; set; }
     public DbSet<DeviceCode> DeviceCodes { get; set; }
-    public DbSet<BudgetApproval> BudgetApprovals { get; set; }
     public DbSet<AuditLog> AuditLogs { get; set; }
     public DbSet<SalaryPayment> SalaryPayments { get; set; }
+
+    // ❌ DbSet<BudgetApproval> BudgetApprovals { get; set; } removed
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -31,7 +34,6 @@ public class AppDbContext : DbContext
             .HasIndex(d => d.DeviceToken)
             .IsUnique();
 
-        // NEW: Ensure SecretKey and PublicKey are unique
         modelBuilder.Entity<Device>()
             .HasIndex(d => d.SecretKey)
             .IsUnique()
@@ -69,12 +71,7 @@ public class AppDbContext : DbContext
             .HasForeignKey(dc => dc.DeviceId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        modelBuilder.Entity<BudgetApproval>()
-            .HasOne(b => b.User)
-            .WithMany(u => u.BudgetApprovals)
-            .HasForeignKey(b => b.UserId)
-            .OnDelete(DeleteBehavior.Cascade);
-
+    
         modelBuilder.Entity<SalaryPayment>()
             .HasOne(sp => sp.Employee)
             .WithMany()

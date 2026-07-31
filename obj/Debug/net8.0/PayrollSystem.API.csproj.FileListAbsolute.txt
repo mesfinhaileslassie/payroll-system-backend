@@ -28,8 +28,8 @@ D:\PR\PayrollSystem.API\bin\Debug\net8.0\Microsoft.IdentityModel.Protocols.OpenI
 D:\PR\PayrollSystem.API\bin\Debug\net8.0\Microsoft.IdentityModel.Tokens.dll
 D:\PR\PayrollSystem.API\bin\Debug\net8.0\Microsoft.OpenApi.dll
 D:\PR\PayrollSystem.API\bin\Debug\net8.0\Mono.TextTemplating.dll
-D:\PR\PayrollSystem.API\bin\Debug\net8.0\MySqlConnector.dll
-D:\PR\PayrollSystem.API\bin\Debug\net8.0\Pomelo.EntityFrameworkCore.MySql.dll
+D:\PR\PayrollSystem.API\bin\Debug\net8.0\Npgsql.dll
+D:\PR\PayrollSystem.API\bin\Debug\net8.0\Npgsql.EntityFrameworkCore.PostgreSQL.dll
 D:\PR\PayrollSystem.API\bin\Debug\net8.0\Swashbuckle.AspNetCore.Swagger.dll
 D:\PR\PayrollSystem.API\bin\Debug\net8.0\Swashbuckle.AspNetCore.SwaggerGen.dll
 D:\PR\PayrollSystem.API\bin\Debug\net8.0\Swashbuckle.AspNetCore.SwaggerUI.dll

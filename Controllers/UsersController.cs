@@ -1,4 +1,5 @@
 // Controllers/UsersController.cs
+
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,7 +11,7 @@ namespace PayrollSystem.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize] // Allow any authenticated user to access the controller
+[Authorize]
 public class UsersController : ControllerBase
 {
     private readonly AppDbContext _context;
@@ -23,7 +24,6 @@ public class UsersController : ControllerBase
     }
 
     // ==================== GET ALL USERS (Admin only) ====================
-
     [Authorize(Roles = "Admin")]
     [HttpGet("all")]
     public async Task<IActionResult> GetAllUsers()
@@ -58,7 +58,6 @@ public class UsersController : ControllerBase
     }
 
     // ==================== GET EMPLOYEES (Finance Manager) ====================
-
     [AllowAnonymous]
     [HttpGet("employees")]
     public async Task<IActionResult> GetEmployees()
@@ -89,20 +88,17 @@ public class UsersController : ControllerBase
     }
 
     // ==================== GET USER BY ID (self or Admin) ====================
-
     [HttpGet("{id}")]
     public async Task<IActionResult> GetUser(int id)
     {
         try
         {
-            // Get the currently authenticated user ID from the token
             var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
 
-            // Allow access if the user is fetching their own profile or if they are an Admin
             if (userIdClaim == null || (int.Parse(userIdClaim) != id && userRole != "Admin"))
             {
-                return Forbid(); // 403 Forbidden
+                return Forbid();
             }
 
             var user = await _context.Users
@@ -136,7 +132,6 @@ public class UsersController : ControllerBase
     }
 
     // ==================== UPDATE USER (Admin only) ====================
-
     [Authorize(Roles = "Admin")]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateUser(int id, [FromBody] UpdateUserRequest request)
@@ -175,7 +170,6 @@ public class UsersController : ControllerBase
     }
 
     // ==================== DELETE USER (Admin only) ====================
-
     [Authorize(Roles = "Admin")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteUser(int id)
@@ -184,7 +178,7 @@ public class UsersController : ControllerBase
         {
             var user = await _context.Users
                 .Include(u => u.Devices)
-                .Include(u => u.BudgetApprovals)
+                // .Include(u => u.BudgetApprovals)   // ❌ REMOVED
                 .FirstOrDefaultAsync(u => u.Id == id);
 
             if (user == null)

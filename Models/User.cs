@@ -1,4 +1,5 @@
 // Models/User.cs
+
 using System.ComponentModel.DataAnnotations;
 
 namespace PayrollSystem.API.Models;
@@ -32,22 +33,23 @@ public class User
     public string? Gender { get; set; }
 
     [MaxLength(50)]
-    public string? Department { get; set; }          // NEW
+    public string? Department { get; set; }
 
     [MaxLength(50)]
-    public string? Position { get; set; }            // NEW
+    public string? Position { get; set; }
 
     [MaxLength(20)]
-    public string? EmployeeId { get; set; }          // NEW
+    public string? EmployeeId { get; set; }
 
     public bool IsActive { get; set; } = true;
 
-    public string Role { get; set; } = "Employee";   // NEW: "Admin" or "Employee"
+    public string Role { get; set; } = "Employee";
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
 
     public ICollection<Device> Devices { get; set; } = new List<Device>();
-    public ICollection<BudgetApproval> BudgetApprovals { get; set; } = new List<BudgetApproval>();
+
+    
 }

@@ -1,4 +1,5 @@
 // Controllers/AuthController.cs
+
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -41,17 +42,16 @@ public class AuthController : ControllerBase
         {
             var user = await _context.Users
                 .FirstOrDefaultAsync(u => u.Username == request.Username);
+
             if (user == null)
                 return Unauthorized(new { success = false, message = "Invalid username or password" });
 
-            // In production, use BCrypt to verify password
             if (user.PasswordHash != request.Password)
                 return Unauthorized(new { success = false, message = "Invalid username or password" });
 
             if (!user.IsActive)
                 return Unauthorized(new { success = false, message = "Account is inactive" });
 
-            // ✅ Generate JWT token
             var token = GenerateJwtToken(user);
 
             user.LastLoginAt = DateTime.UtcNow;
@@ -82,7 +82,6 @@ public class AuthController : ControllerBase
     {
         try
         {
-            // 1. Validate input
             if (string.IsNullOrWhiteSpace(request.Username) ||
                 string.IsNullOrWhiteSpace(request.Email) ||
                 string.IsNullOrWhiteSpace(request.Password))
@@ -90,38 +89,33 @@ public class AuthController : ControllerBase
                 return BadRequest(new { success = false, message = "Username, email, and password are required." });
             }
 
-            // 2. Check if user exists
             if (await _context.Users.AnyAsync(u => u.Username == request.Username))
                 return BadRequest(new { success = false, message = "Username already exists." });
+
             if (await _context.Users.AnyAsync(u => u.Email == request.Email))
                 return BadRequest(new { success = false, message = "Email already exists." });
 
-            // 3. Determine role
+            // Determine role
             string role = "Employee";
             bool requiresDevice = false;
-            if (request.Position == "Payroll Officer")
-            {
-                role = "PayrollOfficer";
-                requiresDevice = true;
-            }
-            else if (request.Position == "Finance Manager")
+
+            // Payroll Officer role removed — only Finance Manager gets special treatment
+            if (request.Position == "Finance Manager")
             {
                 role = "FinanceManager";
                 requiresDevice = true;
             }
 
-            // 4. If role requires device, ensure device code is provided
             if (requiresDevice && string.IsNullOrWhiteSpace(request.DeviceCode))
             {
-                return BadRequest(new { success = false, message = "Device code is required for Payroll Officer and Finance Manager roles." });
+                return BadRequest(new { success = false, message = "Device code is required for Finance Manager role." });
             }
 
-            // 5. Create user
             var user = new User
             {
                 Username = request.Username,
                 Email = request.Email,
-                PasswordHash = request.Password, // In production, hash this
+                PasswordHash = request.Password,
                 FirstName = request.FirstName ?? "",
                 LastName = request.LastName ?? "",
                 Phone = request.Phone ?? "",
@@ -131,10 +125,10 @@ public class AuthController : ControllerBase
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
+
             _context.Users.Add(user);
             await _context.SaveChangesAsync();
 
-            // 6. Register device (only if required)
             if (requiresDevice)
             {
                 try
@@ -150,13 +144,11 @@ public class AuthController : ControllerBase
 
                     if (!deviceResult.Success)
                     {
-                        // Rollback user creation
                         _context.Users.Remove(user);
                         await _context.SaveChangesAsync();
                         return BadRequest(new { success = false, message = deviceResult.Message });
                     }
 
-                    // Return success with activation code
                     return Ok(new
                     {
                         success = true,
@@ -168,7 +160,6 @@ public class AuthController : ControllerBase
                 }
                 catch (Exception ex)
                 {
-                    // Rollback user creation
                     _context.Users.Remove(user);
                     await _context.SaveChangesAsync();
                     _logger.LogError(ex, "Device registration failed for user {Username}", request.Username);
@@ -176,7 +167,6 @@ public class AuthController : ControllerBase
                 }
             }
 
-            // No device registration – return success without activation code
             return Ok(new
             {
                 success = true,
@@ -197,6 +187,7 @@ public class AuthController : ControllerBase
     {
         var secretKey = _configuration["JwtSettings:SecretKey"]
             ?? throw new InvalidOperationException("JwtSettings:SecretKey is not configured.");
+
         var key = Encoding.UTF8.GetBytes(secretKey);
         var signingKey = new SymmetricSecurityKey(key);
 
