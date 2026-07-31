@@ -1,5 +1,3 @@
-// Controllers/SalaryController.cs
-
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -141,6 +139,28 @@ public class SalaryController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error paying salary");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    // ==================== GET PAID MONTHS FOR EMPLOYEE ====================
+
+    [HttpGet("paid-months/{employeeId}")]
+    public async Task<IActionResult> GetPaidMonths(int employeeId)
+    {
+        try
+        {
+            var paidMonths = await _context.SalaryPayments
+                .Where(sp => sp.EmployeeId == employeeId && sp.Status == "APPROVED")
+                .Select(sp => sp.PaymentMonth)
+                .Distinct()
+                .ToListAsync();
+
+            return Ok(new { success = true, data = paidMonths });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting paid months");
             return StatusCode(500, new { success = false, message = "Internal server error" });
         }
     }
