@@ -93,7 +93,7 @@ public class SalaryController : ControllerBase
 
                 if (generatedOtp == request.Otp)
                 {
-                    // ✅ Valid OTP found using the counter
+
                     otpValid = true;
                     matchedCounter = counterUsed;
                     matchedInstallationId = device.InstallationId;
@@ -109,8 +109,7 @@ public class SalaryController : ControllerBase
 
             // If no device matched, reject
             if (!otpValid)
-                return BadRequest(new { success = false, message = "Invalid OTP. Please generate a new token using the Soft Token app while online." });
-
+               return BadRequest(new { success = false, message = "Invalid OTP. Please generate a new token using the Soft Token app." });
             // 6. Replay protection: mark the counter as used
             var usedKey = $"otp_used_{matchedInstallationId}_{matchedCounter}";
             if (_cache.TryGetValue(usedKey, out _))
