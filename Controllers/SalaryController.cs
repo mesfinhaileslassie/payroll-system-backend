@@ -14,7 +14,7 @@ namespace PayrollSystem.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize] // Requires authentication
+[Authorize]
 public class SalaryController : ControllerBase
 {
     private readonly AppDbContext _context;
@@ -27,6 +27,8 @@ public class SalaryController : ControllerBase
         _logger = logger;
         _cache = cache;
     }
+
+    // ==================== PAY SALARY ====================
 
     [HttpPost("pay")]
     public async Task<IActionResult> PaySalary([FromBody] SalaryPayRequest request)
@@ -47,7 +49,7 @@ public class SalaryController : ControllerBase
             if (existing != null)
                 return BadRequest(new { success = false, message = $"Salary for {request.PaymentMonth} has already been paid to this employee." });
 
-            // 3. Find Finance Manager (the acting user)
+            // 3. Find Finance Manager
             var financeManager = await _context.Users
                 .FirstOrDefaultAsync(u => u.Username == request.Username);
             if (financeManager == null)
@@ -60,7 +62,7 @@ public class SalaryController : ControllerBase
             if (devices.Count == 0)
                 return BadRequest(new { success = false, message = "No active device found for this user" });
 
-            // 5. OTP validation with fixed order: check match, then replay, with fallback
+            // 5. OTP validation with cache fallback & replay protection
             bool otpValid = false;
             long matchedCounter = 0;
             string matchedInstallationId = "";
@@ -92,7 +94,7 @@ public class SalaryController : ControllerBase
                     }
                 }
 
-                // If cached counter didn't match, fallback to time-based
+                // If cached counter didn't match, fallback to time-based (check -1, 0, +1)
                 if (!matched)
                 {
                     var (current, currCounter) = GenerateTOTP(device.SecretKey, 0);
@@ -104,16 +106,19 @@ public class SalaryController : ControllerBase
                     {
                         matched = true;
                         counterUsed = currCounter;
+                        generatedOtp = current;
                     }
                     else if (prev == request.Otp)
                     {
                         matched = true;
                         counterUsed = prevCounter;
+                        generatedOtp = prev;
                     }
                     else if (next == request.Otp)
                     {
                         matched = true;
                         counterUsed = nextCounter;
+                        generatedOtp = next;
                     }
                 }
 
@@ -125,7 +130,6 @@ public class SalaryController : ControllerBase
                 if (_cache.TryGetValue(usedKey, out _))
                 {
                     _logger.LogWarning($"OTP reuse attempt for device {device.Id}, counter {counterUsed}");
-                    // Return error for the whole request – the user must generate a new OTP
                     return BadRequest(new { success = false, message = "OTP is already used. Please generate a new token." });
                 }
 
@@ -165,7 +169,8 @@ public class SalaryController : ControllerBase
         }
     }
 
-    // GET endpoints – you may want to also protect them
+    // ==================== GET SALARY PAYMENTS ====================
+
     [HttpGet("employee/{employeeId}")]
     public async Task<IActionResult> GetSalaryPaymentsForEmployee(int employeeId)
     {
