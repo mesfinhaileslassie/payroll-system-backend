@@ -51,33 +51,40 @@ public class DeviceController : ControllerBase
         }
     }
 
-    [AllowAnonymous]
-    [HttpGet("get-device-id/{activationCode}")]
-    public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCode)
+[AllowAnonymous]
+[HttpGet("get-device-id/{activationCode}")]
+public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCode)
+{
+    try
     {
-        try
+        if (string.IsNullOrEmpty(activationCode) || activationCode.Length != 6)
+            return BadRequest(new { success = false, message = "Invalid activation code format" });
+
+        var device = await _deviceService.GetDeviceByActivationCodeAsync(activationCode);
+        if (device == null)
+            return NotFound(new { success = false, message = "Invalid activation code" });
+
+        // Return deviceId at both root and inside 'data' for compatibility
+        return Ok(new
         {
-            if (string.IsNullOrEmpty(activationCode) || activationCode.Length != 6)
-                return BadRequest(new { success = false, message = "Invalid activation code format" });
-
-            var device = await _deviceService.GetDeviceByActivationCodeAsync(activationCode);
-            if (device == null)
-                return NotFound(new { success = false, message = "Invalid activation code" });
-
-            return Ok(new
+            success = true,
+            deviceId = device.Id,           // ✅ root level (old app)
+            status = device.Status,
+            message = "Device found",
+            data = new
             {
-                success = true,
-                deviceId = device.Id,
+                deviceId = device.Id,       // ✅ nested (new app)
                 status = device.Status,
                 message = "Device found"
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, $"Error getting device by activation code: {activationCode}");
-            return StatusCode(500, new { success = false, message = $"Server error: {ex.Message}" });
-        }
+            }
+        });
     }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, $"Error getting device by activation code: {activationCode}");
+        return StatusCode(500, new { success = false, message = $"Server error: {ex.Message}" });
+    }
+}
 
     [AllowAnonymous]
     [HttpPost("activate")]
