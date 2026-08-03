@@ -1,5 +1,3 @@
-// Controllers/AuthController.cs
-
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -95,11 +93,9 @@ public class AuthController : ControllerBase
             if (await _context.Users.AnyAsync(u => u.Email == request.Email))
                 return BadRequest(new { success = false, message = "Email already exists." });
 
-            // Determine role
             string role = "Employee";
             bool requiresDevice = false;
 
-            // Payroll Officer role removed — only Finance Manager gets special treatment
             if (request.Position == "Finance Manager")
             {
                 role = "FinanceManager";
@@ -178,6 +174,50 @@ public class AuthController : ControllerBase
         {
             _logger.LogError(ex, "Employee registration failed");
             return StatusCode(500, new { success = false, message = $"Registration failed: {ex.Message}" });
+        }
+    }
+
+    // ==================== CHANGE PASSWORD ====================
+
+    [HttpPost("change-password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        try
+        {
+            if (request.UserId <= 0)
+                return BadRequest(new { success = false, message = "Invalid user ID." });
+
+            if (string.IsNullOrWhiteSpace(request.CurrentPassword) || 
+                string.IsNullOrWhiteSpace(request.NewPassword))
+            {
+                return BadRequest(new { success = false, message = "Current password and new password are required." });
+            }
+
+            if (request.NewPassword.Length < 6)
+                return BadRequest(new { success = false, message = "New password must be at least 6 characters." });
+
+            var user = await _context.Users.FindAsync(request.UserId);
+            if (user == null)
+                return NotFound(new { success = false, message = "User not found." });
+
+            if (user.PasswordHash != request.CurrentPassword)
+                return BadRequest(new { success = false, message = "Current password is incorrect." });
+
+            user.PasswordHash = request.NewPassword;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Password changed successfully."
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error changing password for user {UserId}", request.UserId);
+            return StatusCode(500, new { success = false, message = "Internal server error." });
         }
     }
 
