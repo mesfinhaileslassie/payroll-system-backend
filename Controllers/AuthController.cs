@@ -9,6 +9,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using BCrypt.Net;
 
 namespace PayrollSystem.API.Controllers;
 
@@ -33,6 +34,56 @@ public class AuthController : ControllerBase
         _configuration = configuration;
     }
 
+    // ==================== PASSWORD HELPER METHODS ====================
+
+    private static bool IsBcryptHash(string hash)
+    {
+        return !string.IsNullOrEmpty(hash) &&
+               (hash.StartsWith("$2a$") || hash.StartsWith("$2b$") ||
+                hash.StartsWith("$2y$") || hash.StartsWith("$2x$"));
+    }
+
+    private static string HashPassword(string password)
+    {
+        return BCrypt.Net.BCrypt.HashPassword(password, workFactor: 12);
+    }
+
+    private static bool VerifyPassword(string password, string hash)
+    {
+        return BCrypt.Net.BCrypt.Verify(password, hash);
+    }
+
+    /// <summary>
+    /// Verifies the provided password against the user's stored password hash.
+    /// If the stored hash is plaintext, it migrates to BCrypt on success.
+    /// </summary>
+    /// <param name="user">The user entity (must be tracked).</param>
+    /// <param name="providedPassword">The password to verify.</param>
+    /// <param name="saveChanges">If true, saves changes to the database after migration.</param>
+    /// <returns>True if the password is valid; otherwise false.</returns>
+    private async Task<bool> VerifyAndMigratePasswordAsync(User user, string providedPassword, bool saveChanges = true)
+    {
+        if (IsBcryptHash(user.PasswordHash))
+        {
+            return VerifyPassword(providedPassword, user.PasswordHash);
+        }
+
+        // Legacy plaintext
+        if (user.PasswordHash == providedPassword)
+        {
+            user.PasswordHash = HashPassword(providedPassword);
+            if (saveChanges)
+            {
+                await _context.SaveChangesAsync();
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    // ==================== LOGIN ====================
+
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
@@ -44,7 +95,10 @@ public class AuthController : ControllerBase
             if (user == null)
                 return Unauthorized(new { success = false, message = "Invalid username or password" });
 
-            if (user.PasswordHash != request.Password)
+            // Verify and migrate if needed
+            bool passwordValid = await VerifyAndMigratePasswordAsync(user, request.Password, saveChanges: true);
+
+            if (!passwordValid)
                 return Unauthorized(new { success = false, message = "Invalid username or password" });
 
             if (!user.IsActive)
@@ -111,7 +165,7 @@ public class AuthController : ControllerBase
             {
                 Username = request.Username,
                 Email = request.Email,
-                PasswordHash = request.Password,
+                PasswordHash = HashPassword(request.Password), // ✅ Hashed
                 FirstName = request.FirstName ?? "",
                 LastName = request.LastName ?? "",
                 Phone = request.Phone ?? "",
@@ -187,7 +241,7 @@ public class AuthController : ControllerBase
             if (request.UserId <= 0)
                 return BadRequest(new { success = false, message = "Invalid user ID." });
 
-            if (string.IsNullOrWhiteSpace(request.CurrentPassword) || 
+            if (string.IsNullOrWhiteSpace(request.CurrentPassword) ||
                 string.IsNullOrWhiteSpace(request.NewPassword))
             {
                 return BadRequest(new { success = false, message = "Current password and new password are required." });
@@ -200,10 +254,13 @@ public class AuthController : ControllerBase
             if (user == null)
                 return NotFound(new { success = false, message = "User not found." });
 
-            if (user.PasswordHash != request.CurrentPassword)
+            // Verify current password (handles both legacy and hashed, migrates if needed)
+            bool currentPasswordValid = await VerifyAndMigratePasswordAsync(user, request.CurrentPassword, saveChanges: true);
+            if (!currentPasswordValid)
                 return BadRequest(new { success = false, message = "Current password is incorrect." });
 
-            user.PasswordHash = request.NewPassword;
+            // Hash and store the new password
+            user.PasswordHash = HashPassword(request.NewPassword);
             user.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();

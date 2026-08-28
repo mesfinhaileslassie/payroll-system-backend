@@ -1,4 +1,5 @@
 // DTOs/SalaryPayRequest.cs
+
 using System.Text.Json.Serialization;
 
 namespace PayrollSystem.API.DTOs;
@@ -19,4 +20,8 @@ public class SalaryPayRequest
 
     [JsonPropertyName("otp")]
     public string Otp { get; set; } = string.Empty;
+
+    // ✅ NEW: Counter used to generate the OTP
+    [JsonPropertyName("counter")]
+    public long Counter { get; set; }
 }

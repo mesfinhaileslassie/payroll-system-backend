@@ -1,4 +1,3 @@
-// DTOs/DeviceRegistrationRequest.cs
 using System.Text.Json.Serialization;
 
 namespace PayrollSystem.API.DTOs;
@@ -12,5 +11,5 @@ public class DeviceRegistrationRequest
     public string? DeviceName { get; set; }
 
     [JsonPropertyName("employeeUsername")]
-    public string EmployeeUsername { get; set; } = string.Empty; // NEW
+    public string EmployeeUsername { get; set; } = string.Empty;
 }

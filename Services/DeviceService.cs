@@ -1,4 +1,3 @@
-// Services/DeviceService.cs
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using PayrollSystem.API.Data;
@@ -43,26 +42,13 @@ public class DeviceService : IDeviceService
             if (string.IsNullOrEmpty(androidId) || string.IsNullOrEmpty(installationId))
                 return new DeviceRegistrationResponse { Success = false, Message = "Missing required device information" };
 
-            // Employee association
-            var employee = await _context.Users
-                .FirstOrDefaultAsync(u => u.Username == request.EmployeeUsername);
-            if (employee == null)
-            {
-                employee = new User
-                {
-                    Username = request.EmployeeUsername,
-                    Email = $"{request.EmployeeUsername}@example.com",
-                    PasswordHash = "default",
-                    FirstName = request.EmployeeUsername,
-                    LastName = "",
-                    IsActive = true,
-                    CreatedAt = DateTime.UtcNow
-                };
-                _context.Users.Add(employee);
-                await _context.SaveChangesAsync();
-            }
+            // ✅ PUBLIC KEY is the primary identity – enforce uniqueness
+            var existingByPublicKey = await _context.Devices
+                .FirstOrDefaultAsync(d => d.PublicKey == publicKey);
+            if (existingByPublicKey != null)
+                return new DeviceRegistrationResponse { Success = false, Message = "Public key already exists." };
 
-            // Check uniqueness
+            // Supplementary checks (not security-critical, but help with duplicate detection)
             var existingByAndroid = await GetDeviceByAndroidIdAsync(androidId);
             if (existingByAndroid != null)
                 return new DeviceRegistrationResponse { Success = false, Message = "This device (Android ID) is already registered." };
@@ -71,10 +57,12 @@ public class DeviceService : IDeviceService
             if (existingByInstallation != null)
                 return new DeviceRegistrationResponse { Success = false, Message = "This installation ID is already registered." };
 
-            var existingByPublicKey = await _context.Devices
-                .FirstOrDefaultAsync(d => d.PublicKey == publicKey);
-            if (existingByPublicKey != null)
-                return new DeviceRegistrationResponse { Success = false, Message = "Public key already exists." };
+            // Employee association – must exist
+            var employee = await _context.Users
+                .FirstOrDefaultAsync(u => u.Username == request.EmployeeUsername);
+
+            if (employee == null)
+                return new DeviceRegistrationResponse { Success = false, Message = "Employee not found." };
 
             var device = new Device
             {
@@ -121,17 +109,25 @@ public class DeviceService : IDeviceService
     // ==================== GET DEVICE BY ACTIVATION CODE ====================
 
     public async Task<Device?> GetDeviceByActivationCodeAsync(string activationCode)
+{
+    var device = await _context.Devices
+        .FirstOrDefaultAsync(d => d.ActivationCode == activationCode);
+
+    if (device != null && device.ActivationCodeExpiry.HasValue && DateTime.UtcNow > device.ActivationCodeExpiry.Value)
     {
-        var device = await _context.Devices
-            .FirstOrDefaultAsync(d => d.ActivationCode == activationCode);
+        _logger.LogWarning($"Activation code {activationCode} has expired");
+        return null;
+    }
 
-        if (device != null && device.ActivationCodeExpiry.HasValue && DateTime.UtcNow > device.ActivationCodeExpiry.Value)
-        {
-            _logger.LogWarning($"Activation code {activationCode} has expired");
-            return null;
-        }
+    return device;
+}
 
-        return device;
+    // ==================== GET DEVICE BY SECRET KEY ====================
+
+    public async Task<Device?> GetDeviceBySecretKeyAsync(string secretKey)
+    {
+        return await _context.Devices
+            .FirstOrDefaultAsync(d => d.SecretKey == secretKey);
     }
 
     // ==================== GET DEVICE BY INSTALLATION ID ====================
@@ -197,11 +193,10 @@ public class DeviceService : IDeviceService
         await Task.CompletedTask;
     }
 
-    // ==================== SIGNATURE VERIFICATION (RSA + FALLBACK) ====================
+    // ==================== SIGNATURE VERIFICATION (RSA ONLY – NO FALLBACK) ====================
 
     public bool VerifySignature(string challenge, string signature, string publicKey)
     {
-        // 1. Try real RSA verification (for new devices)
         try
         {
             if (string.IsNullOrEmpty(publicKey))
@@ -222,17 +217,8 @@ public class DeviceService : IDeviceService
         }
         catch
         {
-            // 2. Fallback to the old dummy check for existing devices with fake keys
-            try
-            {
-                var decoded = Convert.FromBase64String(signature);
-                var decodedString = Encoding.UTF8.GetString(decoded);
-                return decodedString.Contains(challenge);
-            }
-            catch
-            {
-                return false;
-            }
+            // ❌ FALLBACK REMOVED – only real RSA verification is accepted
+            return false;
         }
     }
 
@@ -244,6 +230,7 @@ public class DeviceService : IDeviceService
             device.DeviceToken = deviceToken;
             device.SecretKey = secretKey;
             device.UpdatedAt = DateTime.UtcNow;
+
             try
             {
                 await _context.SaveChangesAsync();
@@ -259,14 +246,6 @@ public class DeviceService : IDeviceService
     public async Task MarkDeviceAsTrustedAsync(int deviceId)
     {
         await Task.CompletedTask;
-    }
-
-    // ==================== GET DEVICE BY SECRET KEY (DEPRECATED) ====================
-
-    public async Task<Device?> GetDeviceBySecretKeyAsync(string secretKey)
-    {
-        return await _context.Devices
-            .FirstOrDefaultAsync(d => d.SecretKey == secretKey);
     }
 
     // ==================== DEVICE MANAGEMENT ====================
@@ -317,7 +296,6 @@ public class DeviceService : IDeviceService
 
         device.Status = status;
         device.UpdatedAt = DateTime.UtcNow;
-
         if (status == "ACTIVE")
             device.ActivatedAt = DateTime.UtcNow;
 

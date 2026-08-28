@@ -1,4 +1,4 @@
-// Controllers/DeviceController.cs
+using System.Security.Claims;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -6,13 +6,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
+using PayrollSystem.API.Models;
 using PayrollSystem.API.Services;
 
 namespace PayrollSystem.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize]
+[Authorize] // All endpoints require authentication by default
 public class DeviceController : ControllerBase
 {
     private readonly IDeviceService _deviceService;
@@ -28,9 +29,26 @@ public class DeviceController : ControllerBase
         _cache = cache;
     }
 
+    private int GetCurrentUserId()
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdClaim) || !int.TryParse(userIdClaim, out var userId))
+            throw new UnauthorizedAccessException("User ID not found in token.");
+        return userId;
+    }
+
+    private async Task<bool> ValidateDeviceOwnership(int deviceId, int currentUserId)
+    {
+        var device = await _deviceService.GetDeviceByIdAsync(deviceId);
+        if (device == null) return false;
+
+        if (User.IsInRole("Admin")) return true;
+        return device.UserId == currentUserId;
+    }
+
     // ==================== PUBLIC ENDPOINTS (AllowAnonymous) ====================
 
-    [AllowAnonymous]
+    [Authorize(Roles = "Admin")]
     [HttpPost("register")]
     public async Task<IActionResult> RegisterDevice([FromBody] DeviceRegistrationRequest request)
     {
@@ -38,6 +56,7 @@ public class DeviceController : ControllerBase
         {
             if (string.IsNullOrEmpty(request.DeviceCode))
                 return BadRequest(new { success = false, message = "Device code is required" });
+
             if (string.IsNullOrEmpty(request.EmployeeUsername))
                 return BadRequest(new { success = false, message = "Employee username is required" });
 
@@ -51,70 +70,45 @@ public class DeviceController : ControllerBase
         }
     }
 
-[AllowAnonymous]
-[HttpGet("get-device-id/{activationCode}")]
-public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCode)
-{
-    try
-    {
-        if (string.IsNullOrEmpty(activationCode) || activationCode.Length != 6)
-            return BadRequest(new { success = false, message = "Invalid activation code format" });
-
-        var device = await _deviceService.GetDeviceByActivationCodeAsync(activationCode);
-        if (device == null)
-            return NotFound(new { success = false, message = "Invalid activation code" });
-
-        // Return deviceId at both root and inside 'data' for compatibility
-        return Ok(new
-        {
-            success = true,
-            deviceId = device.Id,           // ✅ root level (old app)
-            status = device.Status,
-            message = "Device found",
-            data = new
-            {
-                deviceId = device.Id,       // ✅ nested (new app)
-                status = device.Status,
-                message = "Device found"
-            }
-        });
-    }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, $"Error getting device by activation code: {activationCode}");
-        return StatusCode(500, new { success = false, message = $"Server error: {ex.Message}" });
-    }
-}
-
     [AllowAnonymous]
-    [HttpPost("activate")]
-    public async Task<IActionResult> ActivateDevice([FromBody] ActivationRequest request)
+    [HttpGet("get-device-id/{activationCode}")]
+    public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCode)
     {
         try
         {
-            if (request.DeviceId <= 0 || string.IsNullOrEmpty(request.ActivationCode))
-                return BadRequest(new { success = false, message = "Device ID and activation code are required" });
+            // ✅ Log the exact code received (with quotes to catch whitespace)
+            _logger.LogInformation($"📱 Activation code received: '{activationCode}'");
 
-            var result = await _deviceService.ActivateDeviceAsync(request);
-            if (!result.Success)
-                return BadRequest(result);
+            if (string.IsNullOrEmpty(activationCode) || activationCode.Length != 6)
+                return BadRequest(new { success = false, message = "Invalid activation code format" });
 
-            var challenge = GenerateChallenge();
-            await _deviceService.StoreChallengeAsync(request.DeviceId, challenge);
+            var device = await _deviceService.GetDeviceByActivationCodeAsync(activationCode);
+            if (device == null)
+            {
+                _logger.LogWarning($"❌ No device found for activation code: '{activationCode}'");
+                return NotFound(new { success = false, message = "Invalid activation code" });
+            }
+
+            _logger.LogInformation($"✅ Device found: Id={device.Id}, Status={device.Status}, Expiry={device.ActivationCodeExpiry}");
 
             return Ok(new
             {
                 success = true,
-                message = "Activation verified. Please complete device verification.",
-                data = result,
-                challenge = challenge,
-                expiresIn = 60
+                deviceId = device.Id,
+                status = device.Status,
+                message = "Device found",
+                data = new
+                {
+                    deviceId = device.Id,
+                    status = device.Status,
+                    message = "Device found"
+                }
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error activating device");
-            return StatusCode(500, new { success = false, message = "Internal server error" });
+            _logger.LogError(ex, $"Error getting device by activation code: {activationCode}");
+            return StatusCode(500, new { success = false, message = $"Server error: {ex.Message}" });
         }
     }
 
@@ -166,7 +160,7 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
             if (device == null)
                 return NotFound(new { success = false, message = "Device not found" });
 
-            var isValid = _deviceService.VerifySignature(storedChallenge, request.Signature, device.PublicKey);
+            bool isValid = _deviceService.VerifySignature(storedChallenge, request.Signature, device.PublicKey);
             if (!isValid)
                 return BadRequest(new { success = false, message = "Signature verification failed" });
 
@@ -175,8 +169,8 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
 
             var deviceToken = GenerateDeviceToken();
             var secretKey = GenerateSecretKey();
-            await _deviceService.UpdateDeviceCredentialsAsync(request.DeviceId, deviceToken, secretKey);
 
+            await _deviceService.UpdateDeviceCredentialsAsync(request.DeviceId, deviceToken, secretKey);
             await _deviceService.ClearChallengeAsync(request.DeviceId);
 
             return Ok(new
@@ -196,34 +190,17 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
         }
     }
 
-    [AllowAnonymous]
-    [HttpGet("check-registration")]
-    public async Task<IActionResult> CheckDeviceRegistration([FromQuery] string installationId)
-    {
-        if (string.IsNullOrEmpty(installationId))
-            return BadRequest(new { success = false, message = "Installation ID is required" });
-
-        var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
-        if (device == null)
-            return Ok(new { registered = false, status = (string?)null, deviceId = (int?)null });
-
-        return Ok(new { registered = true, status = device.Status, deviceId = device.Id });
-    }
-
-    [AllowAnonymous]
-    [HttpGet("test")]
-    public IActionResult Test()
-    {
-        return Ok(new { message = "API is working!", timestamp = DateTime.Now, status = "online" });
-    }
-
-    // ==================== PROTECTED ENDPOINTS (require auth) ====================
+    // ==================== PROTECTED ENDPOINTS ====================
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetDevice(int id)
     {
         try
         {
+            var currentUserId = GetCurrentUserId();
+            if (!await ValidateDeviceOwnership(id, currentUserId))
+                return Forbid();
+
             var device = await _deviceService.GetDeviceByIdAsync(id);
             if (device == null)
                 return NotFound(new { success = false, message = "Device not found" });
@@ -247,6 +224,10 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
                 }
             });
         }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized();
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting device");
@@ -259,7 +240,12 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
     {
         try
         {
-            var devices = await _context.Devices
+            var currentUserId = GetCurrentUserId();
+            IQueryable<Device> query = _context.Devices;
+            if (!User.IsInRole("Admin"))
+                query = query.Where(d => d.UserId == currentUserId);
+
+            var devices = await query
                 .OrderByDescending(d => d.CreatedAt)
                 .Select(d => new
                 {
@@ -276,6 +262,10 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
 
             return Ok(new { success = true, data = devices });
         }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized();
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting all devices");
@@ -286,27 +276,65 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
     [HttpGet("by-installation/{installationId}")]
     public async Task<IActionResult> GetDeviceByInstallationId(string installationId)
     {
-        if (string.IsNullOrEmpty(installationId))
-            return BadRequest(new { success = false, message = "Installation ID is required" });
-
-        var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
-        if (device == null)
-            return NotFound(new { success = false, message = "Device not found" });
-
-        return Ok(new
+        try
         {
-            success = true,
-            data = new
+            var currentUserId = GetCurrentUserId();
+            if (string.IsNullOrEmpty(installationId))
+                return BadRequest(new { success = false, message = "Installation ID is required" });
+
+            var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
+            if (device == null)
+                return NotFound(new { success = false, message = "Device not found" });
+
+            if (!User.IsInRole("Admin") && device.UserId != currentUserId)
+                return Forbid();
+
+            return Ok(new
             {
-                device.Id,
-                device.AndroidId,
-                device.DeviceModel,
-                device.DeviceName,
-                device.Status,
-                device.InstallationId,
-                device.UserId
-            }
-        });
+                success = true,
+                data = new
+                {
+                    device.Id,
+                    device.AndroidId,
+                    device.DeviceModel,
+                    device.DeviceName,
+                    device.Status,
+                    device.InstallationId,
+                    device.UserId
+                }
+            });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting device by installationId");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
+    }
+
+    [Authorize(Roles = "Admin")]
+    [HttpGet("check-registration")]
+    public async Task<IActionResult> CheckDeviceRegistration([FromQuery] string installationId)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(installationId))
+                return BadRequest(new { success = false, message = "Installation ID is required" });
+
+            var device = await _deviceService.GetDeviceByInstallationIdAsync(installationId);
+            if (device == null)
+                return Ok(new { registered = false, status = (string?)null, deviceId = (int?)null });
+
+            return Ok(new { registered = true, status = device.Status, deviceId = device.Id });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error checking device registration");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
     }
 
     [HttpPut("{id}")]
@@ -316,6 +344,10 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
         {
             if (id <= 0 || string.IsNullOrEmpty(request.DeviceName))
                 return BadRequest(new { success = false, message = "Invalid request" });
+
+            var currentUserId = GetCurrentUserId();
+            if (!await ValidateDeviceOwnership(id, currentUserId))
+                return Forbid();
 
             var device = await _deviceService.GetDeviceByIdAsync(id);
             if (device == null)
@@ -330,6 +362,10 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
 
             return Ok(new { success = true, message = "Device updated successfully" });
         }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized();
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error updating device");
@@ -342,11 +378,19 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
     {
         try
         {
+            var currentUserId = GetCurrentUserId();
+            if (!await ValidateDeviceOwnership(id, currentUserId))
+                return Forbid();
+
             var result = await _deviceService.DeleteDeviceAsync(id);
             if (!result)
                 return NotFound(new { success = false, message = "Device not found" });
 
             return Ok(new { success = true, message = "Device deleted successfully" });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized();
         }
         catch (Exception ex)
         {
@@ -355,25 +399,51 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
         }
     }
 
-    [HttpPost("store-counter")]
-    public IActionResult StoreCounter([FromBody] StoreCounterRequest request)
+ 
+[Authorize]
+[HttpPost("store-counter")]
+public async Task<IActionResult> StoreCounter([FromBody] StoreCounterRequest request)
+{
+    try
     {
+        var currentUserId = GetCurrentUserId();
         if (string.IsNullOrEmpty(request.InstallationId))
             return BadRequest(new { success = false, message = "Installation ID is required" });
 
+        var device = await _context.Devices
+            .FirstOrDefaultAsync(d => d.InstallationId == request.InstallationId);
+        if (device == null)
+            return BadRequest(new { success = false, message = "Device not found for this installation ID" });
+
+        if (!User.IsInRole("Admin") && device.UserId != currentUserId)
+            return Forbid();
+
         var cacheKey = $"otp_counter_{request.InstallationId}";
-        _cache.Set(cacheKey, request.Counter, TimeSpan.FromSeconds(60));
+        var cachedCounter = _cache.Get<long?>(cacheKey);
+        if (cachedCounter.HasValue && request.Counter <= cachedCounter.Value)
+            return BadRequest(new { success = false, message = "Counter must be greater than the last stored value" });
+
+        // ✅ Increase TTL from 60 seconds to 5 minutes
+        _cache.Set(cacheKey, request.Counter, TimeSpan.FromMinutes(5));
+
+        _logger.LogInformation($"✅ Counter stored: InstallationId={request.InstallationId}, Counter={request.Counter}, CacheKey={cacheKey}");
 
         return Ok(new { success = true, message = "Counter stored successfully" });
     }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error storing counter");
+        return StatusCode(500, new { success = false, message = "Internal server error" });
+    }
+}
 
-    // ==================== REGENERATE ACTIVATION CODE ====================
-
+    [Authorize(Roles = "Admin")]
     [HttpPost("{id}/regenerate-activation")]
     public async Task<IActionResult> RegenerateActivationCode(int id)
     {
         try
         {
+            var currentUserId = GetCurrentUserId();
             var device = await _deviceService.GetDeviceByIdAsync(id);
             if (device == null)
                 return NotFound(new { success = false, message = "Device not found" });
@@ -385,6 +455,7 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
             device.ActivationCode = newActivationCode;
             device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
             device.UpdatedAt = DateTime.UtcNow;
+
             await _context.SaveChangesAsync();
 
             return Ok(new
@@ -436,3 +507,4 @@ public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCo
         return value.ToString("D6");
     }
 }
+
