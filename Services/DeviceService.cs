@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using OtpNet;
 using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
+using PayrollSystem.API.Helpers;
 using PayrollSystem.API.Models;
 using System.Security.Cryptography;
 using System.Text;
@@ -42,13 +44,13 @@ public class DeviceService : IDeviceService
             if (string.IsNullOrEmpty(androidId) || string.IsNullOrEmpty(installationId))
                 return new DeviceRegistrationResponse { Success = false, Message = "Missing required device information" };
 
-            // ✅ PUBLIC KEY is the primary identity – enforce uniqueness
+            // Enforce unique public key
             var existingByPublicKey = await _context.Devices
                 .FirstOrDefaultAsync(d => d.PublicKey == publicKey);
             if (existingByPublicKey != null)
                 return new DeviceRegistrationResponse { Success = false, Message = "Public key already exists." };
 
-            // Supplementary checks (not security-critical, but help with duplicate detection)
+            // Additional duplicate checks
             var existingByAndroid = await GetDeviceByAndroidIdAsync(androidId);
             if (existingByAndroid != null)
                 return new DeviceRegistrationResponse { Success = false, Message = "This device (Android ID) is already registered." };
@@ -57,12 +59,28 @@ public class DeviceService : IDeviceService
             if (existingByInstallation != null)
                 return new DeviceRegistrationResponse { Success = false, Message = "This installation ID is already registered." };
 
-            // Employee association – must exist
+            // Employee must exist
             var employee = await _context.Users
                 .FirstOrDefaultAsync(u => u.Username == request.EmployeeUsername);
-
             if (employee == null)
                 return new DeviceRegistrationResponse { Success = false, Message = "Employee not found." };
+
+            // --- Generate TOTP secret (Base32) ---
+            var secretBytes = new byte[20]; // 160 bits
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(secretBytes);
+            var secretBase32 = Base32Encoding.ToString(secretBytes);
+
+            // Validate the generated secret
+            if (!TotpHelper.IsBase32(secretBase32))
+            {
+                _logger.LogError("Generated TOTP secret is invalid Base32: {Secret}", secretBase32);
+                return new DeviceRegistrationResponse { Success = false, Message = "Internal error generating device secret." };
+            }
+
+            // --- Generate activation code and device token ---
+            var activationCode = GenerateActivationCode();
+            var deviceToken = Guid.NewGuid().ToString();
 
             var device = new Device
             {
@@ -75,20 +93,18 @@ public class DeviceService : IDeviceService
                 Manufacturer = manufacturer,
                 DeviceName = request.DeviceName ?? deviceModel,
                 Status = "PENDING",
+                SecretKey = secretBase32,            // ✅ TOTP secret
+                ActivationCode = activationCode,
+                ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3),
+                DeviceToken = deviceToken,
                 CreatedAt = DateTime.UtcNow
             };
 
             _context.Devices.Add(device);
-            await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync(); // single save
 
-            var activationCode = GenerateActivationCode();
-            device.ActivationCode = activationCode;
-            device.ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3);
-            await _context.SaveChangesAsync();
-
-            var deviceToken = Guid.NewGuid().ToString();
-            device.DeviceToken = deviceToken;
-            await _context.SaveChangesAsync();
+            _logger.LogInformation("Device registered for user {Username} (DeviceId: {DeviceId}) with Base32 secret length {Length}",
+                request.EmployeeUsername, device.Id, secretBase32.Length);
 
             return new DeviceRegistrationResponse
             {
@@ -109,18 +125,18 @@ public class DeviceService : IDeviceService
     // ==================== GET DEVICE BY ACTIVATION CODE ====================
 
     public async Task<Device?> GetDeviceByActivationCodeAsync(string activationCode)
-{
-    var device = await _context.Devices
-        .FirstOrDefaultAsync(d => d.ActivationCode == activationCode);
-
-    if (device != null && device.ActivationCodeExpiry.HasValue && DateTime.UtcNow > device.ActivationCodeExpiry.Value)
     {
-        _logger.LogWarning($"Activation code {activationCode} has expired");
-        return null;
-    }
+        var device = await _context.Devices
+            .FirstOrDefaultAsync(d => d.ActivationCode == activationCode);
 
-    return device;
-}
+        if (device != null && device.ActivationCodeExpiry.HasValue && DateTime.UtcNow > device.ActivationCodeExpiry.Value)
+        {
+            _logger.LogWarning($"Activation code {activationCode} has expired");
+            return null;
+        }
+
+        return device;
+    }
 
     // ==================== GET DEVICE BY SECRET KEY ====================
 
@@ -193,7 +209,7 @@ public class DeviceService : IDeviceService
         await Task.CompletedTask;
     }
 
-    // ==================== SIGNATURE VERIFICATION (RSA ONLY – NO FALLBACK) ====================
+    // ==================== SIGNATURE VERIFICATION ====================
 
     public bool VerifySignature(string challenge, string signature, string publicKey)
     {
@@ -217,71 +233,45 @@ public class DeviceService : IDeviceService
         }
         catch
         {
-            // ❌ FALLBACK REMOVED – only real RSA verification is accepted
             return false;
         }
     }
 
+    // Device credentials update – now only used for device token, not for SecretKey (we keep existing)
     public async Task UpdateDeviceCredentialsAsync(int deviceId, string deviceToken, string secretKey)
     {
         var device = await GetDeviceByIdAsync(deviceId);
         if (device != null)
         {
             device.DeviceToken = deviceToken;
-            device.SecretKey = secretKey;
+            // Do NOT overwrite SecretKey if it already exists (it was set at registration)
+            if (!string.IsNullOrEmpty(secretKey) && string.IsNullOrEmpty(device.SecretKey))
+            {
+                device.SecretKey = secretKey;
+            }
             device.UpdatedAt = DateTime.UtcNow;
-
-            try
-            {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateException ex) when (ex.InnerException?.Message?.Contains("Duplicate entry") == true)
-            {
-                _logger.LogError(ex, "Duplicate secret key or device token");
-                throw new InvalidOperationException("Device token or secret key already exists. Please try activating again.");
-            }
+            await _context.SaveChangesAsync();
         }
     }
 
-    public async Task MarkDeviceAsTrustedAsync(int deviceId)
-    {
-        await Task.CompletedTask;
-    }
+    public async Task MarkDeviceAsTrustedAsync(int deviceId) => await Task.CompletedTask;
 
     // ==================== DEVICE MANAGEMENT ====================
 
     public async Task<Device?> GetDeviceByAndroidIdAsync(string androidId)
-    {
-        return await _context.Devices
-            .FirstOrDefaultAsync(d => d.AndroidId == androidId);
-    }
+        => await _context.Devices.FirstOrDefaultAsync(d => d.AndroidId == androidId);
 
     public async Task<Device?> GetDeviceByIdAsync(int deviceId)
-    {
-        return await _context.Devices
-            .FirstOrDefaultAsync(d => d.Id == deviceId);
-    }
+        => await _context.Devices.FirstOrDefaultAsync(d => d.Id == deviceId);
 
     public async Task<List<Device>> GetUserDevicesAsync(int userId)
-    {
-        return await _context.Devices
-            .Where(d => d.UserId == userId)
-            .OrderByDescending(d => d.CreatedAt)
-            .ToListAsync();
-    }
+        => await _context.Devices.Where(d => d.UserId == userId).OrderByDescending(d => d.CreatedAt).ToListAsync();
 
     public async Task<Device?> GetActiveDeviceAsync()
-    {
-        return await _context.Devices
-            .FirstOrDefaultAsync(d => d.Status == "ACTIVE");
-    }
+        => await _context.Devices.FirstOrDefaultAsync(d => d.Status == "ACTIVE");
 
     public async Task<List<Device>> GetAllActiveDevicesAsync()
-    {
-        return await _context.Devices
-            .Where(d => d.Status == "ACTIVE")
-            .ToListAsync();
-    }
+        => await _context.Devices.Where(d => d.Status == "ACTIVE").ToListAsync();
 
     public async Task<bool> IsDeviceActiveAsync(int deviceId)
     {
@@ -293,12 +283,10 @@ public class DeviceService : IDeviceService
     {
         var device = await GetDeviceByIdAsync(deviceId);
         if (device == null) return false;
-
         device.Status = status;
         device.UpdatedAt = DateTime.UtcNow;
         if (status == "ACTIVE")
             device.ActivatedAt = DateTime.UtcNow;
-
         await _context.SaveChangesAsync();
         return true;
     }
@@ -307,7 +295,6 @@ public class DeviceService : IDeviceService
     {
         var device = await GetDeviceByIdAsync(deviceId);
         if (device == null) return false;
-
         _context.Devices.Remove(device);
         await _context.SaveChangesAsync();
         return true;

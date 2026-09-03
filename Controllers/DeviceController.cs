@@ -8,12 +8,13 @@ using PayrollSystem.API.Data;
 using PayrollSystem.API.DTOs;
 using PayrollSystem.API.Models;
 using PayrollSystem.API.Services;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace PayrollSystem.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize] // All endpoints require authentication by default
+[Authorize]
 public class DeviceController : ControllerBase
 {
     private readonly IDeviceService _deviceService;
@@ -41,7 +42,6 @@ public class DeviceController : ControllerBase
     {
         var device = await _deviceService.GetDeviceByIdAsync(deviceId);
         if (device == null) return false;
-
         if (User.IsInRole("Admin")) return true;
         return device.UserId == currentUserId;
     }
@@ -50,13 +50,13 @@ public class DeviceController : ControllerBase
 
     [Authorize(Roles = "Admin")]
     [HttpPost("register")]
+    [EnableRateLimiting("DeviceRegistrationPolicy")] 
     public async Task<IActionResult> RegisterDevice([FromBody] DeviceRegistrationRequest request)
     {
         try
         {
             if (string.IsNullOrEmpty(request.DeviceCode))
                 return BadRequest(new { success = false, message = "Device code is required" });
-
             if (string.IsNullOrEmpty(request.EmployeeUsername))
                 return BadRequest(new { success = false, message = "Employee username is required" });
 
@@ -72,13 +72,12 @@ public class DeviceController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("get-device-id/{activationCode}")]
+    [EnableRateLimiting("ActivationCodePolicy")] 
     public async Task<IActionResult> GetDeviceIdByActivationCode(string activationCode)
     {
         try
         {
-            // ✅ Log the exact code received (with quotes to catch whitespace)
             _logger.LogInformation($"📱 Activation code received: '{activationCode}'");
-
             if (string.IsNullOrEmpty(activationCode) || activationCode.Length != 6)
                 return BadRequest(new { success = false, message = "Invalid activation code format" });
 
@@ -90,7 +89,6 @@ public class DeviceController : ControllerBase
             }
 
             _logger.LogInformation($"✅ Device found: Id={device.Id}, Status={device.Status}, Expiry={device.ActivationCodeExpiry}");
-
             return Ok(new
             {
                 success = true,
@@ -114,6 +112,7 @@ public class DeviceController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("{id}/challenge")]
+    [EnableRateLimiting("ActivationCodePolicy")]
     public async Task<IActionResult> GetChallenge(int id)
     {
         try
@@ -141,6 +140,7 @@ public class DeviceController : ControllerBase
 
     [AllowAnonymous]
     [HttpPost("verify-signature")]
+    [EnableRateLimiting("ActivationCodePolicy")]
     public async Task<IActionResult> VerifySignature([FromBody] SignatureVerificationRequest request)
     {
         try
@@ -167,10 +167,10 @@ public class DeviceController : ControllerBase
             await _deviceService.UpdateDeviceStatusAsync(request.DeviceId, "ACTIVE");
             await _deviceService.MarkDeviceAsTrustedAsync(request.DeviceId);
 
+            // ✅ Use the existing SecretKey (Base32) – do NOT generate new one
             var deviceToken = GenerateDeviceToken();
-            var secretKey = GenerateSecretKey();
+            await _deviceService.UpdateDeviceCredentialsAsync(request.DeviceId, deviceToken, device.SecretKey);
 
-            await _deviceService.UpdateDeviceCredentialsAsync(request.DeviceId, deviceToken, secretKey);
             await _deviceService.ClearChallengeAsync(request.DeviceId);
 
             return Ok(new
@@ -178,7 +178,7 @@ public class DeviceController : ControllerBase
                 success = true,
                 message = "Device verified and activated successfully",
                 deviceToken = deviceToken,
-                secretKey = secretKey,
+                secretKey = device.SecretKey, // ← return the stored Base32 secret
                 status = "ACTIVE",
                 trusted = true
             });
@@ -224,10 +224,7 @@ public class DeviceController : ControllerBase
                 }
             });
         }
-        catch (UnauthorizedAccessException)
-        {
-            return Unauthorized();
-        }
+        catch (UnauthorizedAccessException) { return Unauthorized(); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting device");
@@ -262,10 +259,7 @@ public class DeviceController : ControllerBase
 
             return Ok(new { success = true, data = devices });
         }
-        catch (UnauthorizedAccessException)
-        {
-            return Unauthorized();
-        }
+        catch (UnauthorizedAccessException) { return Unauthorized(); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting all devices");
@@ -304,10 +298,7 @@ public class DeviceController : ControllerBase
                 }
             });
         }
-        catch (UnauthorizedAccessException)
-        {
-            return Unauthorized();
-        }
+        catch (UnauthorizedAccessException) { return Unauthorized(); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting device by installationId");
@@ -356,16 +347,12 @@ public class DeviceController : ControllerBase
             device.DeviceName = request.DeviceName;
             if (!string.IsNullOrEmpty(request.Status) && (request.Status == "ACTIVE" || request.Status == "INACTIVE" || request.Status == "PENDING"))
                 device.Status = request.Status;
-
             device.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
 
+            await _context.SaveChangesAsync();
             return Ok(new { success = true, message = "Device updated successfully" });
         }
-        catch (UnauthorizedAccessException)
-        {
-            return Unauthorized();
-        }
+        catch (UnauthorizedAccessException) { return Unauthorized(); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error updating device");
@@ -388,10 +375,7 @@ public class DeviceController : ControllerBase
 
             return Ok(new { success = true, message = "Device deleted successfully" });
         }
-        catch (UnauthorizedAccessException)
-        {
-            return Unauthorized();
-        }
+        catch (UnauthorizedAccessException) { return Unauthorized(); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error deleting device");
@@ -399,43 +383,40 @@ public class DeviceController : ControllerBase
         }
     }
 
- 
-[Authorize]
-[HttpPost("store-counter")]
-public async Task<IActionResult> StoreCounter([FromBody] StoreCounterRequest request)
-{
-    try
+    [Authorize]
+    [HttpPost("store-counter")]
+    public async Task<IActionResult> StoreCounter([FromBody] StoreCounterRequest request)
     {
-        var currentUserId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(request.InstallationId))
-            return BadRequest(new { success = false, message = "Installation ID is required" });
+        try
+        {
+            var currentUserId = GetCurrentUserId();
+            if (string.IsNullOrEmpty(request.InstallationId))
+                return BadRequest(new { success = false, message = "Installation ID is required" });
 
-        var device = await _context.Devices
-            .FirstOrDefaultAsync(d => d.InstallationId == request.InstallationId);
-        if (device == null)
-            return BadRequest(new { success = false, message = "Device not found for this installation ID" });
+            var device = await _context.Devices
+                .FirstOrDefaultAsync(d => d.InstallationId == request.InstallationId);
+            if (device == null)
+                return BadRequest(new { success = false, message = "Device not found for this installation ID" });
 
-        if (!User.IsInRole("Admin") && device.UserId != currentUserId)
-            return Forbid();
+            if (!User.IsInRole("Admin") && device.UserId != currentUserId)
+                return Forbid();
 
-        var cacheKey = $"otp_counter_{request.InstallationId}";
-        var cachedCounter = _cache.Get<long?>(cacheKey);
-        if (cachedCounter.HasValue && request.Counter <= cachedCounter.Value)
-            return BadRequest(new { success = false, message = "Counter must be greater than the last stored value" });
+            var cacheKey = $"otp_counter_{request.InstallationId}";
+            var cachedCounter = _cache.Get<long?>(cacheKey);
+            if (cachedCounter.HasValue && request.Counter <= cachedCounter.Value)
+                return BadRequest(new { success = false, message = "Counter must be greater than the last stored value" });
 
-        // ✅ Increase TTL from 60 seconds to 5 minutes
-        _cache.Set(cacheKey, request.Counter, TimeSpan.FromMinutes(5));
+            _cache.Set(cacheKey, request.Counter, TimeSpan.FromMinutes(5));
+            _logger.LogInformation($"✅ Counter stored: InstallationId={request.InstallationId}, Counter={request.Counter}, CacheKey={cacheKey}");
 
-        _logger.LogInformation($"✅ Counter stored: InstallationId={request.InstallationId}, Counter={request.Counter}, CacheKey={cacheKey}");
-
-        return Ok(new { success = true, message = "Counter stored successfully" });
+            return Ok(new { success = true, message = "Counter stored successfully" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error storing counter");
+            return StatusCode(500, new { success = false, message = "Internal server error" });
+        }
     }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error storing counter");
-        return StatusCode(500, new { success = false, message = "Internal server error" });
-    }
-}
 
     [Authorize(Roles = "Admin")]
     [HttpPost("{id}/regenerate-activation")]
@@ -490,14 +471,6 @@ public async Task<IActionResult> StoreCounter([FromBody] StoreCounterRequest req
         return BitConverter.ToString(bytes).Replace("-", "").Substring(0, 32);
     }
 
-    private string GenerateSecretKey()
-    {
-        using var rng = RandomNumberGenerator.Create();
-        var bytes = new byte[16];
-        rng.GetBytes(bytes);
-        return BitConverter.ToString(bytes).Replace("-", "").Substring(0, 32);
-    }
-
     private string GenerateActivationCode()
     {
         using var rng = RandomNumberGenerator.Create();
@@ -507,4 +480,3 @@ public async Task<IActionResult> StoreCounter([FromBody] StoreCounterRequest req
         return value.ToString("D6");
     }
 }
-

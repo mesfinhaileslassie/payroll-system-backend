@@ -10,7 +10,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using BCrypt.Net;
-
+using Microsoft.AspNetCore.RateLimiting;
 namespace PayrollSystem.API.Controllers;
 
 [ApiController]
@@ -85,6 +85,7 @@ public class AuthController : ControllerBase
     // ==================== LOGIN ====================
 
     [HttpPost("login")]
+    [EnableRateLimiting("LoginPolicy")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
         try

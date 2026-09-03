@@ -1,12 +1,13 @@
-// Program.cs
-
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
+using System.Threading.RateLimiting;
 using PayrollSystem.API.Data;
 using PayrollSystem.API.Services;
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,7 +30,6 @@ builder.Services.AddSwaggerGen(c =>
         Version = "v1"
     });
 
-    // JWT Bearer Authentication
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -37,13 +37,11 @@ builder.Services.AddSwaggerGen(c =>
         Scheme = "bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-
         Description =
             "Enter your JWT token. " +
             "Example: eyJhbGciOiJIUzI1NiIs..."
     });
 
-    // Apply JWT authentication to Swagger endpoints
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
@@ -108,27 +106,155 @@ builder.Services.AddAuthentication(options =>
 
     options.TokenValidationParameters = new TokenValidationParameters
     {
-        // Validate signing key
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(key),
 
-        // Validate issuer
         ValidateIssuer = true,
         ValidIssuer =
             builder.Configuration["JwtSettings:Issuer"]
             ?? "your-issuer",
 
-        // Validate audience
         ValidateAudience = true,
         ValidAudience =
             builder.Configuration["JwtSettings:Audience"]
             ?? "your-audience",
 
-        // Validate token expiration
         ValidateLifetime = true,
-
-        // Allow a small clock difference
         ClockSkew = TimeSpan.FromMinutes(1)
+    };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnAuthenticationFailed = context =>
+        {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogError("JWT authentication failed: {Exception}", context.Exception);
+            return Task.CompletedTask;
+        },
+        OnTokenValidated = context =>
+        {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogInformation("JWT token validated successfully");
+            return Task.CompletedTask;
+        },
+        OnChallenge = context =>
+        {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogWarning("JWT challenge: {Error}, {ErrorDescription}", context.Error, context.ErrorDescription);
+            return Task.CompletedTask;
+        }
+    };
+});
+
+// ============================================================
+// RATE LIMITING – CORRECTED (JSON-safe)
+// ============================================================
+
+builder.Services.AddRateLimiter(options =>
+{
+    // ------------------------------------------
+    // 1. Login Policy – 5 attempts per minute (by IP address)
+    // ------------------------------------------
+    options.AddPolicy("LoginPolicy", httpContext =>
+    {
+        // Use client IP instead of username (safe, works with JSON)
+        var ipAddress = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"login_{ipAddress}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 5,
+                QueueLimit = 0,
+                Window = TimeSpan.FromMinutes(1)
+            });
+    });
+
+    // ------------------------------------------
+    // 2. OTP Validation (Salary Pay) – 10 per 5 minutes (by user ID)
+    // ------------------------------------------
+    options.AddPolicy("OtpValidationPolicy", httpContext =>
+    {
+        var userId = httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "anonymous";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"otp_{userId}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 10,
+                QueueLimit = 0,
+                Window = TimeSpan.FromMinutes(5)
+            });
+    });
+
+    // ------------------------------------------
+    // 3. Activation Code Retrieval – 3 per minute (by IP)
+    // ------------------------------------------
+    options.AddPolicy("ActivationCodePolicy", httpContext =>
+    {
+        var ipAddress = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"activation_{ipAddress}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 3,
+                QueueLimit = 0,
+                Window = TimeSpan.FromMinutes(1)
+            });
+    });
+
+    // ------------------------------------------
+    // 4. Device Registration – 10 per hour (by user ID)
+    // ------------------------------------------
+    options.AddPolicy("DeviceRegistrationPolicy", httpContext =>
+    {
+        var userId = httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "anonymous";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"device_reg_{userId}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 10,
+                QueueLimit = 0,
+                Window = TimeSpan.FromHours(1)
+            });
+    });
+
+    // ------------------------------------------
+    // 5. Default Policy – 100 per minute (by IP)
+    // ------------------------------------------
+    options.AddPolicy("DefaultPolicy", httpContext =>
+    {
+        var ipAddress = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"default_{ipAddress}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 100,
+                QueueLimit = 0,
+                Window = TimeSpan.FromMinutes(1)
+            });
+    });
+
+    // ------------------------------------------
+    // Global settings
+    // ------------------------------------------
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogWarning("Rate limit exceeded for {Endpoint} from {IP}",
+            context.HttpContext.Request.Path,
+            context.HttpContext.Connection.RemoteIpAddress);
+
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(new
+        {
+            success = false,
+            message = "Too many requests. Please slow down and try again later."
+        }, cancellationToken);
     };
 });
 
@@ -158,12 +284,10 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json",
             "Payroll System API v1");
-
         c.RoutePrefix = "swagger";
     });
 }
@@ -180,18 +304,12 @@ app.UseHttpsRedirection();
 
 app.Use(async (context, next) =>
 {
-    // Allow requests from any origin
     context.Response.Headers["Access-Control-Allow-Origin"] = "*";
-
-    // Allowed HTTP methods
     context.Response.Headers["Access-Control-Allow-Methods"] =
         "GET, POST, PUT, DELETE, OPTIONS";
-
-    // Allowed request headers
     context.Response.Headers["Access-Control-Allow-Headers"] =
         "Content-Type, Authorization, ngrok-skip-browser-warning";
 
-    // Handle OPTIONS preflight requests
     if (context.Request.Method == "OPTIONS")
     {
         context.Response.StatusCode = 200;
@@ -206,9 +324,7 @@ app.Use(async (context, next) =>
     catch (Exception ex)
     {
         Console.WriteLine($"Error: {ex.Message}");
-
         context.Response.StatusCode = 500;
-
         await context.Response.WriteAsync(
             $"An error occurred: {ex.Message}");
     }
@@ -220,6 +336,12 @@ app.Use(async (context, next) =>
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// ============================================================
+// RATE LIMITING
+// ============================================================
+
+app.UseRateLimiter();
 
 // ============================================================
 // CONTROLLERS
