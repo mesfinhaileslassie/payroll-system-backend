@@ -25,8 +25,6 @@ public class RegisterEmployeeRequest
 
     [JsonPropertyName("gender")]
     public string? Gender { get; set; }
-
-    // Position maps to Role (Payroll Officer → PayrollOfficer, Finance Manager → FinanceManager)
     [JsonPropertyName("position")]
     public string? Position { get; set; }
 

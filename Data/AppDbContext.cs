@@ -15,8 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<AuditLog> AuditLogs { get; set; }
     public DbSet<SalaryPayment> SalaryPayments { get; set; }
 
-    // ❌ DbSet<BudgetApproval> BudgetApprovals { get; set; } removed
-
+    
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

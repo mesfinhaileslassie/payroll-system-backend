@@ -88,7 +88,7 @@ public class DeviceController : ControllerBase
                 return NotFound(new { success = false, message = "Invalid activation code" });
             }
 
-            _logger.LogInformation($"✅ Device found: Id={device.Id}, Status={device.Status}, Expiry={device.ActivationCodeExpiry}");
+            _logger.LogInformation($" Device found: Id={device.Id}, Status={device.Status}, Expiry={device.ActivationCodeExpiry}");
             return Ok(new
             {
                 success = true,
@@ -167,7 +167,7 @@ public class DeviceController : ControllerBase
             await _deviceService.UpdateDeviceStatusAsync(request.DeviceId, "ACTIVE");
             await _deviceService.MarkDeviceAsTrustedAsync(request.DeviceId);
 
-            // ✅ Use the existing SecretKey (Base32) – do NOT generate new one
+           
             var deviceToken = GenerateDeviceToken();
             await _deviceService.UpdateDeviceCredentialsAsync(request.DeviceId, deviceToken, device.SecretKey);
 
@@ -407,7 +407,7 @@ public class DeviceController : ControllerBase
                 return BadRequest(new { success = false, message = "Counter must be greater than the last stored value" });
 
             _cache.Set(cacheKey, request.Counter, TimeSpan.FromMinutes(5));
-            _logger.LogInformation($"✅ Counter stored: InstallationId={request.InstallationId}, Counter={request.Counter}, CacheKey={cacheKey}");
+            _logger.LogInformation($" Counter stored: InstallationId={request.InstallationId}, Counter={request.Counter}, CacheKey={cacheKey}");
 
             return Ok(new { success = true, message = "Counter stored successfully" });
         }

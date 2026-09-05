@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "D:\\PR\\PayrollSystem.API - Copy\\PayrollSystem.API.csproj": {}
+    "D:\\PR\\Final Files\\PayrollSystem.APIV2\\PayrollSystem.API.csproj": {}
   },
   "projects": {
-    "D:\\PR\\PayrollSystem.API - Copy\\PayrollSystem.API.csproj": {
+    "D:\\PR\\Final Files\\PayrollSystem.APIV2\\PayrollSystem.API.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "D:\\PR\\PayrollSystem.API - Copy\\PayrollSystem.API.csproj",
+        "projectUniqueName": "D:\\PR\\Final Files\\PayrollSystem.APIV2\\PayrollSystem.API.csproj",
         "projectName": "PayrollSystem.API",
-        "projectPath": "D:\\PR\\PayrollSystem.API - Copy\\PayrollSystem.API.csproj",
+        "projectPath": "D:\\PR\\Final Files\\PayrollSystem.APIV2\\PayrollSystem.API.csproj",
         "packagesPath": "C:\\Users\\USERTEST\\.nuget\\packages\\",
-        "outputPath": "D:\\PR\\PayrollSystem.API - Copy\\obj\\",
+        "outputPath": "D:\\PR\\Final Files\\PayrollSystem.APIV2\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\USERTEST\\AppData\\Roaming\\NuGet\\NuGet.Config"

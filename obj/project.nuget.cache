@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "5+xZcmbttVI=",
+  "dgSpecHash": "jkAvbpYZ1Fg=",
   "success": true,
-  "projectFilePath": "D:\\PR\\PayrollSystem.API - Copy\\PayrollSystem.API.csproj",
+  "projectFilePath": "D:\\PR\\Final Files\\PayrollSystem.APIV2\\PayrollSystem.API.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\USERTEST\\.nuget\\packages\\bcrypt.net-next\\4.0.3\\bcrypt.net-next.4.0.3.nupkg.sha512",
     "C:\\Users\\USERTEST\\.nuget\\packages\\humanizer.core\\2.14.1\\humanizer.core.2.14.1.nupkg.sha512",
@@ -62,10 +62,10 @@
     "C:\\Users\\USERTEST\\.nuget\\packages\\system.text.encodings.web\\8.0.0\\system.text.encodings.web.8.0.0.nupkg.sha512",
     "C:\\Users\\USERTEST\\.nuget\\packages\\system.text.json\\8.0.0\\system.text.json.8.0.0.nupkg.sha512",
     "C:\\Users\\USERTEST\\.nuget\\packages\\system.threading.channels\\6.0.0\\system.threading.channels.6.0.0.nupkg.sha512",
-    "C:\\Users\\USERTEST\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.20\\microsoft.aspnetcore.app.ref.8.0.20.nupkg.sha512",
-    "C:\\Users\\USERTEST\\.nuget\\packages\\microsoft.netcore.app.host.win-x64\\8.0.20\\microsoft.netcore.app.host.win-x64.8.0.20.nupkg.sha512",
     "C:\\Users\\USERTEST\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.20\\microsoft.netcore.app.ref.8.0.20.nupkg.sha512",
-    "C:\\Users\\USERTEST\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.20\\microsoft.windowsdesktop.app.ref.8.0.20.nupkg.sha512"
+    "C:\\Users\\USERTEST\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.20\\microsoft.windowsdesktop.app.ref.8.0.20.nupkg.sha512",
+    "C:\\Users\\USERTEST\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.20\\microsoft.aspnetcore.app.ref.8.0.20.nupkg.sha512",
+    "C:\\Users\\USERTEST\\.nuget\\packages\\microsoft.netcore.app.host.win-x64\\8.0.20\\microsoft.netcore.app.host.win-x64.8.0.20.nupkg.sha512"
   ],
   "logs": []
 }

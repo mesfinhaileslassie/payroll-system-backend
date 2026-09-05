@@ -53,14 +53,7 @@ public class AuthController : ControllerBase
         return BCrypt.Net.BCrypt.Verify(password, hash);
     }
 
-    /// <summary>
-    /// Verifies the provided password against the user's stored password hash.
-    /// If the stored hash is plaintext, it migrates to BCrypt on success.
-    /// </summary>
-    /// <param name="user">The user entity (must be tracked).</param>
-    /// <param name="providedPassword">The password to verify.</param>
-    /// <param name="saveChanges">If true, saves changes to the database after migration.</param>
-    /// <returns>True if the password is valid; otherwise false.</returns>
+
     private async Task<bool> VerifyAndMigratePasswordAsync(User user, string providedPassword, bool saveChanges = true)
     {
         if (IsBcryptHash(user.PasswordHash))

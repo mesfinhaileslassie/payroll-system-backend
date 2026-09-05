@@ -44,7 +44,7 @@ public class DeviceService : IDeviceService
             if (string.IsNullOrEmpty(androidId) || string.IsNullOrEmpty(installationId))
                 return new DeviceRegistrationResponse { Success = false, Message = "Missing required device information" };
 
-            // Enforce unique public key
+            // unique public key
             var existingByPublicKey = await _context.Devices
                 .FirstOrDefaultAsync(d => d.PublicKey == publicKey);
             if (existingByPublicKey != null)
@@ -93,7 +93,7 @@ public class DeviceService : IDeviceService
                 Manufacturer = manufacturer,
                 DeviceName = request.DeviceName ?? deviceModel,
                 Status = "PENDING",
-                SecretKey = secretBase32,            // ✅ TOTP secret
+                SecretKey = secretBase32,           
                 ActivationCode = activationCode,
                 ActivationCodeExpiry = DateTime.UtcNow.AddMinutes(3),
                 DeviceToken = deviceToken,
@@ -101,7 +101,7 @@ public class DeviceService : IDeviceService
             };
 
             _context.Devices.Add(device);
-            await _context.SaveChangesAsync(); // single save
+            await _context.SaveChangesAsync(); 
 
             _logger.LogInformation("Device registered for user {Username} (DeviceId: {DeviceId}) with Base32 secret length {Length}",
                 request.EmployeeUsername, device.Id, secretBase32.Length);
@@ -237,14 +237,12 @@ public class DeviceService : IDeviceService
         }
     }
 
-    // Device credentials update – now only used for device token, not for SecretKey (we keep existing)
     public async Task UpdateDeviceCredentialsAsync(int deviceId, string deviceToken, string secretKey)
     {
         var device = await GetDeviceByIdAsync(deviceId);
         if (device != null)
         {
-            device.DeviceToken = deviceToken;
-            // Do NOT overwrite SecretKey if it already exists (it was set at registration)
+            device.DeviceToken = deviceToken;      
             if (!string.IsNullOrEmpty(secretKey) && string.IsNullOrEmpty(device.SecretKey))
             {
                 device.SecretKey = secretKey;

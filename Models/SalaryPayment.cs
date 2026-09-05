@@ -28,6 +28,6 @@ public class SalaryPayment
     [MaxLength(10)]
     public string? OTP { get; set; }
 
-    // Navigation property
+
     public User Employee { get; set; } = null!;
 }

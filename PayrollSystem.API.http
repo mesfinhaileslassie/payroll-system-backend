@@ -1,5 +1,4 @@
-@PayrollSystem.API_HostAddress = http://localhost:5062
-
+@PayrollSystem.API_HostAddress = http://102.208.98.85:7201
 GET {{PayrollSystem.API_HostAddress}}/weatherforecast/
 Accept: application/json
 

@@ -18,8 +18,7 @@ public class Device
     [MaxLength(100)]
     public string? DeviceModel { get; set; }
 
-    // [MaxLength(100)] public string? SerialNumber { get; set; }  // ❌ REMOVED
-
+    
     [Required]
     [MaxLength(36)]
     public string InstallationId { get; set; } = string.Empty;
@@ -58,6 +57,5 @@ public class Device
 
     public DateTime? UpdatedAt { get; set; }
 
-    // Navigation property
     public User User { get; set; } = null!;
 }

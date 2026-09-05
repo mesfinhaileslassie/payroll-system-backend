@@ -178,7 +178,7 @@ public class UsersController : ControllerBase
         {
             var user = await _context.Users
                 .Include(u => u.Devices)
-                // .Include(u => u.BudgetApprovals)   // ❌ REMOVED
+                
                 .FirstOrDefaultAsync(u => u.Id == id);
 
             if (user == null)

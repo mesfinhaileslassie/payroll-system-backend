@@ -147,7 +147,7 @@ builder.Services.AddAuthentication(options =>
 });
 
 // ============================================================
-// RATE LIMITING – CORRECTED (JSON-safe)
+// RATE LIMITING
 // ============================================================
 
 builder.Services.AddRateLimiter(options =>
@@ -157,7 +157,6 @@ builder.Services.AddRateLimiter(options =>
     // ------------------------------------------
     options.AddPolicy("LoginPolicy", httpContext =>
     {
-        // Use client IP instead of username (safe, works with JSON)
         var ipAddress = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: $"login_{ipAddress}",
@@ -238,9 +237,6 @@ builder.Services.AddRateLimiter(options =>
             });
     });
 
-    // ------------------------------------------
-    // Global settings
-    // ------------------------------------------
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.OnRejected = async (context, cancellationToken) =>
     {
@@ -299,17 +295,19 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 // ============================================================
-// CUSTOM CORS MIDDLEWARE
+// CUSTOM CORS MIDDLEWARE (FIXED)
 // ============================================================
 
 app.Use(async (context, next) =>
 {
+    // ✅ Always set CORS headers for all requests (including OPTIONS)
     context.Response.Headers["Access-Control-Allow-Origin"] = "*";
     context.Response.Headers["Access-Control-Allow-Methods"] =
         "GET, POST, PUT, DELETE, OPTIONS";
     context.Response.Headers["Access-Control-Allow-Headers"] =
-        "Content-Type, Authorization, ngrok-skip-browser-warning";
+        "Content-Type, Authorization";
 
+    // ✅ Handle preflight requests
     if (context.Request.Method == "OPTIONS")
     {
         context.Response.StatusCode = 200;

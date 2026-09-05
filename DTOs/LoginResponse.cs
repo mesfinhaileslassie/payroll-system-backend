@@ -1,4 +1,4 @@
-// DTOs/LoginResponse.cs (updated)
+// DTOs/LoginResponse.cs 
 using System.Text.Json.Serialization;
 
 namespace PayrollSystem.API.DTOs;
@@ -21,7 +21,7 @@ public class LoginResponse
     public int? UserId { get; set; }
 
     [JsonPropertyName("role")]
-    public string? Role { get; set; }   // NEW: "Admin" or "Employee"
+    public string? Role { get; set; }  
 
     [JsonPropertyName("isActive")]
     public bool IsActive { get; set; }

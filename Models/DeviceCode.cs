@@ -20,6 +20,6 @@ public class DeviceCode
     public DateTime? ExpiresAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     
-    // Navigation property
+
     public Device Device { get; set; } = null!;
 }
